@@ -1,0 +1,246 @@
+proofreader.nbmedia.co.in {
+    reverse_proxy localhost:8800
+}
+fsm.shantielectronics.com {
+reverse_proxy localhost:8080
+}
+
+analysis.nbmedia.co.in {
+ reverse_proxy localhost:3008
+
+}
+
+prachivip.in {
+   reverse_proxy localhost:3006 
+}
+
+timestamps.nbmedia.co.in {
+
+    reverse_proxy localhost:3001
+
+}
+
+
+title.nbmedia.co.in {
+
+    reverse_proxy localhost:3002
+
+}
+
+casetracker.nbmedia.co.in {
+
+    reverse_proxy localhost:3004
+
+}
+
+#ga.nbmedia.co.in {
+
+ #   reverse_proxy localhost:3000
+
+#}
+
+ga.nbmedia.co.in {
+    # Global settings for video streaming
+    # Note: Large uploads handled by extended timeouts in reverse_proxy
+    
+    # Compress text-based content (Caddy automatically skips compressed formats like videos)
+    encode gzip
+
+    # HLS Streaming and Static Video Files Handler
+    handle_path /history_static/* {
+        root * /root/NB_Projects/V2/GAModel/history
+        
+        # Define matchers for different file types
+        @hls_manifest path *.m3u8
+        @hls_segments path *.ts *.m4s
+        @video_files path *.mp4 *.webm *.mov *.avi
+        
+        # Handle OPTIONS preflight requests
+        @options method OPTIONS
+        handle @options {
+            header Access-Control-Allow-Origin "*"
+            header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+            header Access-Control-Allow-Headers "Range, Content-Type, Accept-Encoding"
+            header Access-Control-Max-Age "86400"
+            respond 204
+        }
+
+        # Common headers for all video content
+        header {
+            # CORS headers for cross-origin video loading
+            Access-Control-Allow-Origin "*"
+            Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+            Access-Control-Allow-Headers "Range, Content-Type, Accept-Encoding"
+            Access-Control-Expose-Headers "Content-Length, Content-Range, Content-Type"
+            Access-Control-Max-Age "86400"
+            
+            # Critical for seeking and buffering
+            Accept-Ranges bytes
+            
+            # Prevent video transcoding/optimization by proxies
+            X-Content-Type-Options "nosniff"
+        }
+        
+        # HLS manifests - short cache (they can change)
+        header @hls_manifest {
+            Cache-Control "public, max-age=10, no-transform"
+            Content-Type "application/vnd.apple.mpegurl"
+        }
+        
+        # HLS segments - medium cache (immutable once created)
+        header @hls_segments {
+            Cache-Control "public, max-age=3600, immutable, no-transform"
+        }
+        
+        # Video files - long cache (permanent content)
+        header @video_files {
+            Cache-Control "public, max-age=604800, immutable, no-transform"
+        }
+        
+        # Enable file server
+        file_server
+    }
+
+    # API and main app handler
+    handle {
+        # Extended timeouts for video uploads and processing
+        reverse_proxy localhost:3000 {
+            # Forward real client information
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            
+            # Timeouts for long video operations and uploads
+            transport http {
+                read_timeout 7200s
+                write_timeout 7200s
+                dial_timeout 30s
+                response_header_timeout 300s
+            }
+        }
+    }
+}
+
+
+
+srt.nbmedia.co.in {
+
+    reverse_proxy localhost:3003 {
+
+    
+
+        header_up Host {upstream_hostport}
+
+    }
+
+}
+
+
+
+
+ronit.ai {
+    header {
+        # CORS Headers
+        Access-Control-Allow-Origin "*"
+        Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
+        Access-Control-Allow-Headers "Content-Type, Authorization, Upgrade, Connection, X-Requested-With, Accept"
+        Access-Control-Max-Age "86400"
+
+        # CRITICAL FIX: Allow microphone access so Ronit AI can hear users
+        Permissions-Policy "microphone=*, camera=*"
+    }
+
+    reverse_proxy localhost:5000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+
+
+
+
+studio.nbmedia.co.in {
+    reverse_proxy localhost:3005 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+        header_up X-Real-IP {remote_host}
+        flush_interval -1
+    }
+
+    # Enable compression
+    encode gzip zstd
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # Cache static assets
+    @static {
+        path /_next/static/* /favicon.ico /images/*
+    }
+    header @static Cache-Control "public, max-age=31536000, immutable"
+}
+
+
+diet.dietitianamisha.com {
+    encode gzip
+
+    # Recipe image upload limit
+    request_body {
+        max_size 12MB
+    }
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # API → FastAPI uvicorn
+    handle /api/* {
+        reverse_proxy localhost:8000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Frontend (CRA dev server / serve build)
+    handle {
+        reverse_proxy localhost:3007 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}
+
+:8080 {
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy localhost:8011 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    handle {
+        reverse_proxy localhost:3009 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}
+

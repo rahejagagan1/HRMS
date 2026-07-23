@@ -1,0 +1,1 @@
+ALTER TABLE "WeeklyReport" ADD COLUMN IF NOT EXISTS "viewsRows" JSONB;

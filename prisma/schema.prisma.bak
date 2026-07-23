@@ -1,0 +1,1028 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  manager
+  lead
+  sub_lead
+  writer
+  editor
+  qa
+  researcher
+  gc
+  vo_artist
+  publisher
+  production_manager
+  hr_manager
+  researcher_manager
+  member
+}
+
+enum OrgLevel {
+  ceo
+  special_access
+  hod
+  manager
+  hr_manager
+  lead
+  sub_lead
+  production_team
+  member
+}
+
+model User {
+  id                Int        @id @default(autoincrement())
+  clickupUserId     BigInt     @unique
+  name              String
+  email             String     @unique
+  role              UserRole   @default(member)
+  orgLevel          OrgLevel   @default(member)
+  managerId         Int?
+  teamCapsule       String?
+  /// Monthly case delivery target for CM/PM (denominator for delivery %). Per-manager.
+  monthlyDeliveryTargetCases Int?
+  isActive          Boolean    @default(true)
+  reportAccess      Boolean    @default(false)
+  profilePictureUrl String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  manager           User?      @relation("TeamHierarchy", fields: [managerId], references: [id])
+  teamMembers       User[]     @relation("TeamHierarchy")
+
+  assignedCases     Case[]     @relation("CaseAssignee")
+  researchedCases   Case[]     @relation("CaseResearcher")
+  writtenCases      Case[]     @relation("CaseWriter")
+  editedCases       Case[]     @relation("CaseEditor")
+  assignedSubtasks  Subtask[]  @relation("SubtaskAssignee")
+  caseAssignments   CaseAssignee[]
+  monthlyRatings    MonthlyRating[]
+  scorecardConfigs  ScorecardConfig[]
+  scoreEditsMade    ScoreEditLog[]     @relation("ScoreEditor")
+  managerRatingsGiven    ManagerRating[] @relation("RatingManager")
+  managerRatingsReceived ManagerRating[] @relation("RatedUser")
+  weeklyReports          WeeklyReport[]  @relation("ManagerWeeklyReports")
+  monthlyReports         MonthlyReport[] @relation("ManagerMonthlyReports")
+  reportViewAccess       UserReportAccess[] @relation("ReportViewer")
+  reportViewableBy       UserReportAccess[] @relation("ReportViewable")
+  violations             Violation[]        @relation("ViolationUser")
+  violationsReported     Violation[]        @relation("ViolationReporter")
+  violationsResponsible  Violation[]        @relation("ViolationResponsible")
+  teamRatingsGiven       TeamManagerRating[] @relation("TeamMemberRater")
+  teamRatingsReceived    TeamManagerRating[] @relation("ManagerRated")
+  dashboardFeedbacks     UserFeedback[]
+
+  // ── HR Module Relations ──
+  employeeProfile        EmployeeProfile?
+  attendances            Attendance[]
+  userShift              UserShift?
+  leaveBalances          LeaveBalance[]
+  leaveApplications      LeaveApplication[]   @relation("LeaveApplicant")
+  leaveApprovals         LeaveApplication[]   @relation("LeaveApprover")
+  heldAssets             AssetAssignment[]
+  ownedDocuments         EmployeeDocument[]   @relation("DocOwner")
+  uploadedDocuments      EmployeeDocument[]   @relation("DocUploader")
+  raisedTickets          Ticket[]             @relation("TicketRaiser")
+  assignedTickets        Ticket[]             @relation("TicketAssignee")
+  ticketComments         TicketComment[]
+  postedAnnouncements    Announcement[]
+  readAnnouncements      AnnouncementRead[]
+
+  @@index([managerId])
+}
+
+// ═══════════════════════════════════════════════════════
+// Dashboard product feedback (any authenticated user)
+// ═══════════════════════════════════════════════════════
+
+model UserFeedback {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category  String   @default("general_issue")
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Space {
+  id              Int       @id @default(autoincrement())
+  clickupSpaceId  String    @unique
+  name            String
+  isSynced        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  capsules        Capsule[]
+}
+
+model Capsule {
+  id              Int       @id @default(autoincrement())
+  clickupFolderId String    @unique
+  spaceId         Int
+  name            String
+  shortName       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  space           Space     @relation(fields: [spaceId], references: [id])
+  productionLists ProductionList[]
+}
+
+model ProductionList {
+  id              Int       @id @default(autoincrement())
+  clickupListId   String    @unique
+  capsuleId       Int?
+  spaceId         Int?
+  name            String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  capsule         Capsule?  @relation(fields: [capsuleId], references: [id])
+  cases           Case[]
+}
+
+model Case {
+  id                      Int       @id @default(autoincrement())
+  clickupTaskId           String    @unique
+  productionListId        Int
+  name                    String
+  status                  String
+  statusType              String?
+  clickupUrl              String?
+
+  assigneeUserId          Int?
+  researcherUserId        Int?
+  writerUserId            Int?
+  editorUserId            Int?
+
+  caseRating              Decimal?  @db.Decimal(3, 1)
+  caseType                String?
+  channel                 String?
+
+  tthDocLink              String?
+  title                   String?   @db.Text
+  scriptFirstDraftLink    String?
+  finalScriptLink         String?
+  voDocLink               String?
+  voLink                  String?
+  videoFirstDraftLink     String?
+  finalVideoLink          String?
+
+  scriptQaStartDate       DateTime?
+  writerQualityScore      Int?
+  writerDeliveryTime      String?
+  writerEfficiencyScore   String?
+  finalWriterRating       Decimal?  @db.Decimal(5, 2)
+  scriptQualityRating     Decimal?  @db.Decimal(4, 2)
+  scriptRatingReason      String?   @db.Text
+
+  videoGcStartDate        DateTime?
+  videoChangesCount       Int?
+  qaVideoMeetingDate      DateTime?
+  editorQualityScore      Int?
+  editorDeliveryTime      String?
+  editorEfficiencyScore   String?
+  finalVideoRating        Decimal?  @db.Decimal(5, 2)
+  videoQualityRating      Decimal?  @db.Decimal(4, 2)
+  videoRatingReason       String?   @db.Text
+
+  helperEditorE           Int?
+  helperEditorT           Int?
+  helperWriterE           Int?
+  helperWriterT           Int?
+
+  uploadDate              DateTime?
+  caseStartDate           DateTime?
+  caseCompletionDate      DateTime?
+  overallTat              Decimal?  @db.Decimal(5, 1)
+  tat                     Decimal?  @db.Decimal(5, 1)
+  youtubeVideoUrl         String?
+
+  dateCreated             DateTime?
+  dateDone                DateTime?
+  lastSyncedAt            DateTime  @default(now())
+  isArchived              Boolean   @default(false)
+
+  productionList          ProductionList @relation(fields: [productionListId], references: [id])
+  assignee                User?     @relation("CaseAssignee", fields: [assigneeUserId], references: [id])
+  researcher              User?     @relation("CaseResearcher", fields: [researcherUserId], references: [id])
+  writer                  User?     @relation("CaseWriter", fields: [writerUserId], references: [id])
+  editor                  User?     @relation("CaseEditor", fields: [editorUserId], references: [id])
+  subtasks                Subtask[]
+  assignees               CaseAssignee[]
+  youtubeStats            YoutubeStats?
+
+  @@index([status])
+  @@index([statusType])
+  @@index([channel])
+  @@index([writerUserId])
+  @@index([editorUserId])
+  @@index([assigneeUserId])
+  @@index([researcherUserId])
+  @@index([productionListId])
+  @@index([dateCreated])
+}
+
+model CaseAssignee {
+  id              Int       @id @default(autoincrement())
+  caseId          Int
+  userId          Int
+  clickupUserId   BigInt
+
+  case            Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user            User      @relation(fields: [userId], references: [id])
+
+  @@unique([caseId, userId])
+  @@index([caseId])
+  @@index([userId])
+}
+
+model Subtask {
+  id                Int       @id @default(autoincrement())
+  clickupTaskId     String    @unique
+  caseId            Int
+  name              String
+  status            String
+  statusType        String?
+  assigneeUserId    Int?
+  startDate         DateTime?
+  dueDate           DateTime?
+  dateDone          DateTime?
+  orderIndex        Int?
+  tat               Decimal?  @db.Decimal(5, 2)
+  customFieldsJson  Json?     @db.JsonB
+  dateCreated       DateTime?
+  lastSyncedAt      DateTime  @default(now())
+
+  case              Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  assignee          User?     @relation("SubtaskAssignee", fields: [assigneeUserId], references: [id])
+
+  @@index([caseId])
+  @@index([assigneeUserId])
+}
+
+model YoutubeStats {
+  id              Int       @id @default(autoincrement())
+  caseId          Int       @unique
+  youtubeVideoId  String
+  videoUrl        String
+  videoTitle      String?
+  viewCount       BigInt?
+  likeCount       BigInt?
+  commentCount    BigInt?
+  last30DaysViews BigInt?
+  ctr             Decimal?  @db.Decimal(5, 2)
+  publishedAt     DateTime?
+  lastFetchedAt   DateTime  @default(now())
+
+  case            Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  history         YoutubeStatsHistory[]
+
+  @@index([youtubeVideoId])
+}
+
+model YoutubeStatsHistory {
+  id              Int       @id @default(autoincrement())
+  youtubeStatsId  Int
+  snapshotDate    DateTime  @db.Date
+  viewCount       BigInt
+  likeCount       BigInt?
+
+  youtubeStats    YoutubeStats @relation(fields: [youtubeStatsId], references: [id], onDelete: Cascade)
+
+  @@unique([youtubeStatsId, snapshotDate])
+}
+
+model MonthlyRating {
+  id                   Int       @id @default(autoincrement())
+  userId               Int
+  month                DateTime  @db.Date
+  roleType             String
+  casesCompleted       Int       @default(0)
+  avgQualityScore      Decimal?  @db.Decimal(5, 2)
+  avgDeliveryScore     Decimal?  @db.Decimal(5, 2)
+  avgEfficiencyScore   Decimal?  @db.Decimal(5, 2)
+  totalViews           BigInt?
+  overallRating        Decimal?  @db.Decimal(5, 2)
+  rankInRole           Int?
+  isManualOverride     Boolean   @default(false)
+  calculatedAt         DateTime  @default(now())
+
+  // Per-parameter star ratings (1-5)
+  // Note: writerQualityStars / scriptQualityStars are kept for backward compat.
+  // For editors these map to editorQuality / videoQuality respectively.
+  // parametersJson is the authoritative breakdown — named columns are convenience only.
+  writerQualityStars   Decimal?  @db.Decimal(3, 1)
+  scriptQualityStars   Decimal?  @db.Decimal(3, 1)
+  ownershipStars       Decimal?  @db.Decimal(3, 1)
+  monthlyTargetsStars  Decimal?  @db.Decimal(3, 1)
+  ytViewsStars         Decimal?  @db.Decimal(3, 1)
+  parametersJson       Json?     @db.JsonB  // full calculation breakdown (authoritative)
+  manualRatingsPending Boolean   @default(true)
+
+  // Formula versioning — which template produced this result
+  formulaTemplateId    Int?
+  formulaVersion       Int?
+
+  user               User             @relation(fields: [userId], references: [id])
+  editLogs           ScoreEditLog[]
+  formulaTemplate    FormulaTemplate? @relation(fields: [formulaTemplateId], references: [id])
+
+  @@unique([userId, month, roleType])
+  @@index([month])
+}
+
+model SyncLog {
+  id              Int       @id @default(autoincrement())
+  syncType        String
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  recordsSynced   Int?
+  errorsCount     Int?      @default(0)
+  errorDetails    Json?     @db.JsonB
+  status          String    @default("running")
+
+  @@index([syncType, status, completedAt]) // covers sync-status query
+  @@index([startedAt])                     // covers dashboard lastSync query
+}
+
+model SyncConfig {
+  id              Int       @id @default(autoincrement())
+  key             String    @unique  // e.g. "selected_spaces", "selected_lists"
+  value           Json      @db.JsonB
+  updatedAt       DateTime  @updatedAt
+}
+
+model YtVideoLookup {
+  id              Int       @id @default(autoincrement())
+  youtubeVideoId  String    @unique
+  videoUrl        String
+  title           String
+  viewCount       BigInt
+  likeCount       BigInt?
+  commentCount    BigInt?
+  publishedAt     DateTime?
+  fetchedAt       DateTime  @default(now())
+}
+
+/// YouTube dashboard: videos published on/after YT_DASHBOARD_PUBLISHED_SINCE, refreshed on cron (e.g. every 5h).
+model YoutubeDashboardVideo {
+  id              Int      @id @default(autoincrement())
+  youtubeVideoId  String   @unique
+  channelId       String
+  channelName     String
+  title           String
+  publishedAt     DateTime?
+  viewCount       BigInt
+  likeCount       BigInt?
+  syncedAt        DateTime @default(now())
+
+  @@index([channelId])
+  @@index([publishedAt])
+  @@index([syncedAt])
+}
+
+/// YouTube dashboard: per-channel quarter view totals from YouTube Analytics (refreshed on manual / cron sync).
+model YoutubeDashboardQuarterMetrics {
+  id                   Int      @id @default(autoincrement())
+  channelId            String
+  year                 Int
+  quarter              Int
+  analyticsStartStr    String
+  analyticsEndStr      String
+  viewsGainedInQuarter BigInt?
+  fetchedAt            DateTime @default(now()) @updatedAt
+
+  @@unique([channelId, year, quarter])
+  @@index([year, quarter])
+}
+
+/// YouTube dashboard: per-channel 10-day bucket chart + uploads (filled on same cron as quarter metrics).
+model YoutubeDashboardChannelQuarterAnalysis {
+  id            Int      @id @default(autoincrement())
+  channelId     String
+  year          Int
+  quarter       Int
+  /// { analyticsStartStr, analyticsEndStr, buckets: [...], uploadsTotal }
+  chartJson     Json     @db.JsonB
+  headlineViews Int?
+  fetchedAt     DateTime @default(now()) @updatedAt
+
+  @@unique([channelId, year, quarter])
+  @@index([year, quarter])
+}
+
+model ScorecardConfig {
+  id              Int       @id @default(autoincrement())
+  userId          Int?      // null = role-level default config
+  roleType        String    // "writer", "editor", "qa_manager", etc.
+  layoutType      String    // "production", "manager", "functional_manager", "individual"
+  metricsConfig   Json      @db.JsonB  // { metrics: [{name, label, weight, maxScore}], formula: "..." }
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User?     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, roleType])
+  @@index([roleType])
+}
+
+model ScoreEditLog {
+  id              Int       @id @default(autoincrement())
+  monthlyRatingId Int
+  fieldName       String    // e.g. "overallRating", "avgQualityScore"
+  oldValue        String
+  newValue        String
+  editedBy        Int       // userId of the person who edited
+  reason          String?
+  editedAt        DateTime  @default(now())
+
+  monthlyRating   MonthlyRating @relation(fields: [monthlyRatingId], references: [id], onDelete: Cascade)
+  editor          User          @relation("ScoreEditor", fields: [editedBy], references: [id])
+
+  @@index([monthlyRatingId])
+  @@index([editedBy])
+}
+
+model ManagerRating {
+  id              Int       @id @default(autoincrement())
+  managerId       Int       // who submitted the rating
+  userId          Int       // who was rated
+  period          String    // "2026-03" (monthly) or "2026-W10" (weekly)
+  periodType      String    // "weekly" | "monthly"
+  ratingsJson     Json      @db.JsonB  // { "communication": 4, "teamwork": 5, ... }
+  overallScore    Decimal?  @db.Decimal(5, 2)
+  comments        String?   @db.Text
+  isDraft         Boolean   @default(false)  // true = saved as draft, false = final submission
+  submittedAt     DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  manager         User      @relation("RatingManager", fields: [managerId], references: [id])
+  user            User      @relation("RatedUser", fields: [userId], references: [id])
+
+  @@unique([managerId, userId, period, periodType])
+  @@index([userId])
+  @@index([managerId])
+  @@index([period])
+}
+
+/// Team members rate their manager (used in CM Pillar 5).
+/// Each team member submits one rating per period for their manager.
+/// The average across all team members is 50% of the combined pillar.
+model TeamManagerRating {
+  id              Int       @id @default(autoincrement())
+  teamMemberId    Int       // who submitted the rating (team member)
+  managerId       Int       // who was rated (the CM/PM)
+  period          String    // "2026-03"
+  periodType      String    @default("monthly")
+  ratingsJson     Json      @db.JsonB  // { "team_q1": 4, "team_q2": 3, ... }
+  overallScore    Decimal?  @db.Decimal(5, 2)
+  comments        String?   @db.Text
+  isAnonymous     Boolean   @default(true)
+  submittedAt     DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  teamMember      User      @relation("TeamMemberRater", fields: [teamMemberId], references: [id])
+  manager         User      @relation("ManagerRated", fields: [managerId], references: [id])
+
+  @@unique([teamMemberId, managerId, period, periodType])
+  @@index([managerId, period])
+  @@index([teamMemberId])
+}
+
+model RatingConfig {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique  // e.g. "writer_weights", "writer_quality_brackets", "yt_views_brackets"
+  value     Json     @db.JsonB
+  updatedAt DateTime @updatedAt
+}
+
+model WeeklyReport {
+  id          Int      @id @default(autoincrement())
+  managerId   Int
+  week        Int      // 1..N per month (Mon–Sun weeks; N usually 4–5)
+  month       Int      // 0–11
+  year        Int
+  // Named columns replacing dataJson blob
+  writerRows     Json?   @db.JsonB   // Section A1: Writer output rows
+  editorRows     Json?   @db.JsonB   // Section A2: Editor output rows
+  researcherRows Json?   @db.JsonB   // Section A3: Researcher performance rows
+  overviewRows   Json?   @db.JsonB   // Section B: Quick overview rows
+  viewsRows      Json?   @db.JsonB   // Section D: Views and Changes rows (Andrew)
+  dataJson     Json?   @db.JsonB   // Legacy fallback (kept for old records)
+  isLocked    Boolean  @default(true)
+  submittedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  manager     User     @relation("ManagerWeeklyReports", fields: [managerId], references: [id])
+
+  @@unique([managerId, week, month, year])
+  @@index([managerId])
+  @@index([year, month, week]) // covers ORDER BY year desc, month desc, week desc
+}
+
+model MonthlyReport {
+  id          Int      @id @default(autoincrement())
+  managerId   Int
+  month       Int      // 0–11
+  year        Int
+  isLocked    Boolean  @default(false)
+  submittedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // ── Header (auto-filled, not user-typed) ──
+  reportingPeriod  String?   // e.g. "Mar 1 to Mar 31, 2026"
+
+  // ── Section 1: Executive Summary ──
+  executiveSummary  String?  @db.Text
+
+  // ── Section 2: Production Output ──
+  totalVideoTarget    String?
+  totalVideoActual    String?
+  totalVideoVariance  String?
+  heroContentTarget   String?
+  heroContentActual   String?
+  heroContentVariance String?
+  editorNotes         Json?   @db.JsonB  // { [editorId]: "note text" }
+  writerNotes         Json?   @db.JsonB  // { [writerId]: "note text" }
+
+  // ── Section 3: Shortfall Analysis ──
+  shortfallSummary  String?  @db.Text
+
+  // ── Section 4: Team Recognition ──
+  teamRecognition   String?  @db.Text
+
+  // ── Section 5: Key Learnings ──
+  keyLearning1      String?  @db.Text
+  keyLearning2      String?  @db.Text
+  keyLearning3      String?  @db.Text
+
+  // ── Section 5B: Risks & Immediate Attention ──
+  risksAttention    String?  @db.Text
+
+  // ── Section 6: Behavioral Concerns (Optional & Confidential) ──
+  behavioralConcerns String? @db.Text
+
+  // ── Section 7: Remark (Optional) ──
+  remark            String?  @db.Text
+
+  // ── Nishant Bhatia monthly report (researcher format) ──
+  nishantResearcherRows Json?  @db.JsonB  // Array of researcher performance rows
+  nishantOverview       Json?  @db.JsonB  // Monthly overview summary row
+
+  // Andrew James monthly sections
+  andrewA1Rows  Json?  @db.JsonB  // Section A1: QA Script review rows (Andrew/Muskan)
+  andrewA2Rows  Json?  @db.JsonB  // Section A2: QA Video review rows (Abhishek)
+  andrewBRows   Json?  @db.JsonB  // Section B: Monthly overview rows
+  andrewCRows   Json?  @db.JsonB  // Section C: Rohini & Shika thumbnail rows
+  andrewDRows   Json?  @db.JsonB  // Section D: Views and Changes rows
+
+  // Tanvi Dogra HR Manager monthly report
+  hrMonthlyData Json?  @db.JsonB  // All HR monthly report sections
+
+  manager     User     @relation("ManagerMonthlyReports", fields: [managerId], references: [id])
+
+  @@unique([managerId, month, year])
+  @@index([managerId])
+  @@index([year, month]) // covers ORDER BY year desc, month desc
+}
+
+model UserReportAccess {
+  id        Int  @id @default(autoincrement())
+  userId    Int
+  managerId Int
+
+  viewer    User @relation("ReportViewer",   fields: [userId],    references: [id], onDelete: Cascade)
+  manager   User @relation("ReportViewable", fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, managerId])
+  @@index([userId])
+  @@index([managerId])
+}
+
+model ChannelBaseline {
+  id            Int      @id @default(autoincrement())
+  channelName   String   @unique
+  baselineViews BigInt
+  updatedAt     DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════
+// Dynamic Formula Engine
+// ═══════════════════════════════════════════════════════
+
+/// Versioned formula template for a role (writer, editor, etc.)
+/// Each template defines sections (pillars), weights, and guardrails.
+/// Only ONE template per roleType should have isActive = true at a time.
+model FormulaTemplate {
+  id            Int       @id @default(autoincrement())
+  roleType      String    // "writer" | "editor" | any future role
+  version       Int       @default(1)
+  isActive      Boolean   @default(false)
+  label         String
+  description   String?
+
+  /// Array of FormulaSection objects (see src/lib/ratings/types.ts)
+  sections      Json      @db.JsonB
+
+  /// Array of GuardrailRule objects (optional)
+  guardrails    Json?     @db.JsonB
+
+  /// Whether to round pillar star results to nearest integer (default true)
+  roundOff      Boolean   @default(true)
+
+  /// Optional: user IDs assigned to this template (for roles like researcher where
+  /// multiple sub-groups share the same UserRole but have different formulas).
+  /// When set, only these users are included in batch calculation for this template.
+  assignedUserIds Json?   @db.JsonB  // number[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  monthlyRatings MonthlyRating[]
+
+  @@unique([roleType, version])
+  @@index([roleType])
+  @@index([isActive])
+}
+
+// ═══════════════════════════════════════════════════════
+// Researcher Pipeline Snapshot (monthly RTC + FOIA counts from ClickUp)
+// One row per month — upserted on every sync so no duplicates.
+// ═══════════════════════════════════════════════════════
+
+model ResearcherPipelineSnapshot {
+  id                    Int       @id @default(autoincrement())
+  month                 DateTime  @unique @db.Date  // first day of month, e.g. 2026-03-01
+  rtcCount              Int       @default(0)
+  foiaCount             Int       @default(0)
+  totalCount            Int       @default(0)
+  rtcCaseRatingAvg      Decimal?  @db.Decimal(5, 2)
+  foiaCaseRatingAvg     Decimal?  @db.Decimal(5, 2)
+  /// Parent-task count in "{Month} FOIA Pitched Cases" (ClickUp); pipeline target count still uses MonthlyReport.
+  foiaPitchedCount      Int       @default(0)
+  foiaPitchedCaseRatingAvg Decimal? @db.Decimal(5, 2)
+  caseRatingAvgCombined Decimal?  @db.Decimal(5, 2)
+  rtcListName           String?
+  foiaListName          String?
+  foiaPitchedListName   String?
+  snapshotData          Json?     @db.JsonB  // optional raw details for audit
+  syncError             String?              // last sync error message if any
+  syncedAt              DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([month])
+}
+
+// ═══════════════════════════════════════════════════════
+// System Violation Log
+// ═══════════════════════════════════════════════════════
+
+enum ViolationSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum ViolationStatus {
+  open
+  in_progress
+  closed
+}
+
+model Violation {
+  id            Int                @id @default(autoincrement())
+  userId        Int
+  reportedBy    Int
+  title         String             @default("")
+  description   String?            @db.Text
+  severity      ViolationSeverity  @default(medium)
+  status        ViolationStatus    @default(open)
+  category            String?            // violation type: "attendance", "misconduct", "policy_breach", etc.
+  actionTaken         String?            @db.Text
+  notes               String?            @db.Text
+  violationDate       DateTime?
+  responsiblePersonId Int?
+  resolvedAt          DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  user                User               @relation("ViolationUser", fields: [userId], references: [id])
+  reporter            User               @relation("ViolationReporter", fields: [reportedBy], references: [id])
+  responsiblePerson   User?              @relation("ViolationResponsible", fields: [responsiblePersonId], references: [id])
+
+  @@index([userId])
+  @@index([reportedBy])
+  @@index([status])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Employee Profile
+// ═══════════════════════════════════════════════════════
+
+model EmployeeProfile {
+  id                Int       @id @default(autoincrement())
+  userId            Int       @unique
+  employeeId        String    @unique          // e.g. "NB-2026-001"
+  designation       String?
+  department        String?
+  employmentType    String    @default("fulltime")  // fulltime | parttime | contract | intern
+  workLocation      String    @default("office")    // office | remote | hybrid
+  joiningDate       DateTime?
+  phone             String?
+  dateOfBirth       DateTime?
+  gender            String?
+  bloodGroup        String?
+  emergencyContact  String?
+  emergencyPhone    String?
+  address           String?
+  city              String?
+  state             String?
+  noticePeriodDays  Int       @default(30)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([department])
+  @@index([employmentType])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Shift & Attendance
+// ═══════════════════════════════════════════════════════
+
+model Shift {
+  id              Int       @id @default(autoincrement())
+  name            String    @unique
+  startTime       String    // "09:00"
+  endTime         String    // "18:00"
+  breakMinutes    Int       @default(60)
+  workDays        Json      @db.JsonB  // ["Mon","Tue","Wed","Thu","Fri"]
+  createdAt       DateTime  @default(now())
+
+  userShifts      UserShift[]
+}
+
+model UserShift {
+  id              Int       @id @default(autoincrement())
+  userId          Int       @unique
+  shiftId         Int
+  effectiveFrom   DateTime  @default(now())
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shift           Shift     @relation(fields: [shiftId], references: [id])
+
+  @@index([shiftId])
+}
+
+model Attendance {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  date            DateTime  @db.Date
+  clockIn         DateTime?
+  clockOut        DateTime?
+  totalMinutes    Int       @default(0)
+  status          String    @default("absent")  // present | absent | late | half_day | on_leave | weekend | holiday
+  overtimeMinutes Int       @default(0)
+  ipAddress       String?
+  location        String?
+  isRegularized   Boolean   @default(false)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([date])
+  @@index([status])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Leave Management
+// ═══════════════════════════════════════════════════════
+
+model LeaveType {
+  id                  Int       @id @default(autoincrement())
+  name                String    @unique
+  code                String    @unique   // "CL", "SL", "PL"
+  daysPerYear         Int       @default(12)
+  maxConsecutiveDays  Int?
+  carryForward        Boolean   @default(false)
+  isPaid              Boolean   @default(true)
+  applicableGender    String    @default("all")  // all | male | female
+  isActive            Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+
+  balances            LeaveBalance[]
+  applications        LeaveApplication[]
+}
+
+model HolidayCalendar {
+  id              Int       @id @default(autoincrement())
+  year            Int
+  date            DateTime  @db.Date
+  name            String
+  type            String    @default("public")  // public | company | optional
+  createdAt       DateTime  @default(now())
+
+  @@unique([year, date])
+  @@index([year])
+}
+
+model LeaveBalance {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  leaveTypeId     Int
+  year            Int
+  totalDays       Decimal   @default(0)  @db.Decimal(5, 1)
+  usedDays        Decimal   @default(0)  @db.Decimal(5, 1)
+  pendingDays     Decimal   @default(0)  @db.Decimal(5, 1)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveType       LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@unique([userId, leaveTypeId, year])
+  @@index([userId])
+}
+
+model LeaveApplication {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  leaveTypeId     Int
+  fromDate        DateTime  @db.Date
+  toDate          DateTime  @db.Date
+  totalDays       Decimal   @db.Decimal(5, 1)
+  reason          String    @db.Text
+  status          String    @default("pending")  // pending | approved | rejected | cancelled
+  approvedById    Int?
+  approvalNote    String?
+  appliedAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user            User      @relation("LeaveApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  leaveType       LeaveType @relation(fields: [leaveTypeId], references: [id])
+  approver        User?     @relation("LeaveApprover", fields: [approvedById], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([fromDate, toDate])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Announcements
+// ═══════════════════════════════════════════════════════
+
+model Announcement {
+  id              Int       @id @default(autoincrement())
+  title           String
+  body            String    @db.Text
+  type            String    @default("all")  // all | department | team
+  targetId        String?                     // dept name or manager id
+  isPinned        Boolean   @default(false)
+  publishAt       DateTime  @default(now())
+  expiresAt       DateTime?
+  postedById      Int
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  postedBy        User      @relation(fields: [postedById], references: [id])
+  reads           AnnouncementRead[]
+
+  @@index([type])
+  @@index([publishAt])
+}
+
+model AnnouncementRead {
+  id              Int       @id @default(autoincrement())
+  announcementId  Int
+  userId          Int
+  readAt          DateTime  @default(now())
+
+  announcement    Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Asset Management
+// ═══════════════════════════════════════════════════════
+
+model Asset {
+  id              Int       @id @default(autoincrement())
+  name            String
+  category        String    // laptop | camera | phone | microphone | other
+  serialNumber    String?
+  purchaseDate    DateTime?
+  currentValue    Decimal?  @db.Decimal(10, 2)
+  condition       String    @default("good")  // new | good | fair | poor
+  status          String    @default("available")  // available | assigned | in_repair | retired
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  assignments     AssetAssignment[]
+
+  @@index([status])
+  @@index([category])
+}
+
+model AssetAssignment {
+  id                  Int       @id @default(autoincrement())
+  assetId             Int
+  userId              Int
+  assignedAt          DateTime  @default(now())
+  returnedAt          DateTime?
+  conditionOnAssign   String?
+  conditionOnReturn   String?
+  notes               String?
+
+  asset               Asset     @relation(fields: [assetId], references: [id])
+  user                User      @relation(fields: [userId], references: [id])
+
+  @@index([assetId])
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Document Management
+// ═══════════════════════════════════════════════════════
+
+model EmployeeDocument {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  category        String    // offer_letter | id_proof | pan_card | aadhar | contract | payslip | experience_letter | other
+  fileName        String
+  fileUrl         String
+  uploadedById    Int
+  expiryDate      DateTime?
+  isVerified      Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+
+  user            User      @relation("DocOwner", fields: [userId], references: [id], onDelete: Cascade)
+  uploadedBy      User      @relation("DocUploader", fields: [uploadedById], references: [id])
+
+  @@index([userId])
+  @@index([category])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Helpdesk / HR Tickets
+// ═══════════════════════════════════════════════════════
+
+model Ticket {
+  id              Int       @id @default(autoincrement())
+  subject         String
+  description     String    @db.Text
+  category        String    // payroll | leave | it_support | document_request | policy | other
+  priority        String    @default("medium")  // low | medium | high | urgent
+  raisedById      Int
+  assignedToId    Int?
+  status          String    @default("open")  // open | in_progress | resolved | closed
+  dueAt           DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  raisedBy        User      @relation("TicketRaiser", fields: [raisedById], references: [id])
+  assignedTo      User?     @relation("TicketAssignee", fields: [assignedToId], references: [id])
+  comments        TicketComment[]
+
+  @@index([raisedById])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([priority])
+}
+
+model TicketComment {
+  id              Int       @id @default(autoincrement())
+  ticketId        Int
+  authorId        Int
+  message         String    @db.Text
+  createdAt       DateTime  @default(now())
+
+  ticket          Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author          User      @relation(fields: [authorId], references: [id])
+
+  @@index([ticketId])
+}

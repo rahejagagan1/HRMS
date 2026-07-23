@@ -1,0 +1,3710 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  manager
+  lead
+  sub_lead
+  writer
+  editor
+  graphic_designer
+  qa
+  researcher
+  gc
+  vo_artist
+  publisher
+  production_manager
+  hr_manager
+  researcher_manager
+  member
+}
+
+enum OrgLevel {
+  ceo
+  special_access
+  hod
+  manager
+  hr_manager
+  lead
+  sub_lead
+  production_team
+  member
+}
+
+model User {
+  id                         Int      @id @default(autoincrement())
+  /// Nullable: HR-registered users may not exist in ClickUp yet. Backfilled by sync when a ClickUp user with matching email is found.
+  clickupUserId              BigInt?  @unique
+  name                       String
+  email                      String   @unique
+  role                       UserRole @default(member)
+  orgLevel                   OrgLevel @default(member)
+  /// New designation-based RBAC. Nullable during migration while orgLevel/role
+  /// still co-exist; backfilled from (orgLevel, role), then the source of truth.
+  designationId              Int?
+  managerId                  Int?
+  /// Day-to-day / dotted-line manager. Independent of the formal
+  /// reporting line in `managerId` — used for org-tree views that need
+  /// to show a secondary supervisor (e.g. a team lead who runs the
+  /// rituals while the head-of-department signs off).
+  inlineManagerId            Int?
+  teamCapsule                String?
+  /// Monthly case delivery target for CM/PM (denominator for delivery %). Per-manager.
+  monthlyDeliveryTargetCases Int?
+  isActive                   Boolean  @default(true)
+  reportAccess               Boolean  @default(false)
+  /// True when the user must walk through the first-login wizard
+  /// (/onboarding) before reaching the dashboard. Set by HR at creation
+  /// when "Enable onboarding flow" is toggled on.
+  onboardingPending          Boolean  @default(false)
+  profilePictureUrl          String?
+  /// Which LeavePolicy this user is assigned to. Null = no policy (HR
+  /// must set balances manually). Used by accrual + "Apply policy" flows.
+  leavePolicyId              Int?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  manager       User?        @relation("TeamHierarchy", fields: [managerId], references: [id])
+  teamMembers   User[]       @relation("TeamHierarchy")
+  inlineManager User?        @relation("InlineHierarchy", fields: [inlineManagerId], references: [id])
+  inlineReports User[]       @relation("InlineHierarchy")
+  designation   Designation? @relation(fields: [designationId], references: [id])
+
+  assignedCases                  Case[]                          @relation("CaseAssignee")
+  researchedCases                Case[]                          @relation("CaseResearcher")
+  writtenCases                   Case[]                          @relation("CaseWriter")
+  editedCases                    Case[]                          @relation("CaseEditor")
+  assignedSubtasks               Subtask[]                       @relation("SubtaskAssignee")
+  caseAssignments                CaseAssignee[]
+  subtaskAssignments             SubtaskAssignee[]
+  caseEditorEntries              CaseEditorEntry[]
+  caseWriterEntries              CaseWriterEntry[]
+  monthlyRatings                 MonthlyRating[]
+  scorecardConfigs               ScorecardConfig[]
+  scoreEditsMade                 ScoreEditLog[]                  @relation("ScoreEditor")
+  managerRatingsGiven            ManagerRating[]                 @relation("RatingManager")
+  managerRatingsReceived         ManagerRating[]                 @relation("RatedUser")
+  weeklyReports                  WeeklyReport[]                  @relation("ManagerWeeklyReports")
+  monthlyReports                 MonthlyReport[]                 @relation("ManagerMonthlyReports")
+  reportViewAccess               UserReportAccess[]              @relation("ReportViewer")
+  reportViewableBy               UserReportAccess[]              @relation("ReportViewable")
+  designationReportViewable      DesignationReportAccess[]       @relation("DesignationReportViewable")
+  violations                     Violation[]                     @relation("ViolationUser")
+  violationsReported             Violation[]                     @relation("ViolationReporter")
+  violationsResponsible          Violation[]                     @relation("ViolationResponsible")
+  violationFilesUploaded         ViolationActionFile[]           @relation("ViolationFileUploader")
+  teamRatingsGiven               TeamManagerRating[]             @relation("TeamMemberRater")
+  teamRatingsReceived            TeamManagerRating[]             @relation("ManagerRated")
+  dashboardFeedbacks             UserFeedback[]
+  youtubeDashUserQuarterChannels YoutubeDashUserQuarterChannel[]
+  channelViewTargetsUpdated      ChannelViewTarget[]             @relation("ChannelViewTargetUpdater")
+  pulseResponses                 PulseResponse[]                 @relation("PulseResponseUser")
+
+  // ── HR Module Relations ──
+  employeeProfile              EmployeeProfile?
+  attendances                  Attendance[]
+  userShift                    UserShift?
+  leavePolicy                  LeavePolicy?                 @relation(fields: [leavePolicyId], references: [id])
+  leaveBalances                LeaveBalance[]
+  leaveApplications            LeaveApplication[]           @relation("LeaveApplicant")
+  leaveApprovals               LeaveApplication[]           @relation("LeaveApprover")
+  leaveFinalApprovals          LeaveApplication[]           @relation("LeaveFinalApprover")
+  leaveCoverages               LeaveApplication[]           @relation("LeavePOC")
+  heldAssets                   AssetAssignment[]
+  ownedDocuments               EmployeeDocument[]           @relation("DocOwner")
+  uploadedDocuments            EmployeeDocument[]           @relation("DocUploader")
+  raisedTickets                Ticket[]                     @relation("TicketRaiser")
+  assignedTickets              Ticket[]                     @relation("TicketAssignee")
+  ticketComments               TicketComment[]
+  postedAnnouncements          Announcement[]
+  readAnnouncements            AnnouncementRead[]
+  goals                        Goal[]
+  expenses                     Expense[]
+  expensesApproved             Expense[]                    @relation("ExpenseApprover")
+  travelRequests               TravelRequest[]
+  travelRequestsApproved       TravelRequest[]              @relation("TravelApprover")
+  salaryStructure              SalaryStructure?
+  payslips                     Payslip[]
+  salaryHolds                  SalaryHold[]                 @relation("SalaryHoldUser")
+  salaryHoldsCreated           SalaryHold[]                 @relation("SalaryHoldCreator")
+  taxOverrides                 TaxOverride[]                @relation("TaxOverrideUser")
+  taxOverridesCreated          TaxOverride[]                @relation("TaxOverrideCreator")
+  regularizations              AttendanceRegularization[]   @relation("RegularizationUser")
+  regularizationsApproved      AttendanceRegularization[]   @relation("RegularizationApprover")
+  regularizationsFinalApproved AttendanceRegularization[]   @relation("RegularizationFinalApprover")
+  regularizationsGranted       AttendanceRegularization[]   @relation("RegularizationGrantedBy")
+  wfhRequests                  WFHRequest[]                 @relation("WFHUser")
+  wfhApprovals                 WFHRequest[]                 @relation("WFHApprover")
+  wfhCoverages                 WFHRequest[]                 @relation("WFHPOC")
+  wfhBalances                  WfhBalance[]                 @relation("WfhBalanceUser")
+  wfhBalancesUpdated           WfhBalance[]                 @relation("WfhBalanceUpdater")
+  onDutyRequests               OnDutyRequest[]              @relation("OnDutyUser")
+  onDutyApprovals              OnDutyRequest[]              @relation("OnDutyApprover")
+  onDutyCoverages              OnDutyRequest[]              @relation("OnDutyPOC")
+  compOffRequests              CompOffRequest[]             @relation("CompOffUser")
+  compOffApprovals             CompOffRequest[]             @relation("CompOffApprover")
+  compOffCoverages             CompOffRequest[]             @relation("CompOffPOC")
+  engagePosts                  EngagePost[]                 @relation("EngageAuthor")
+  engagePraises                EngagePost[]                 @relation("EngagePraiseTo")
+  engageReactions              EngageReaction[]
+  engageComments               EngageComment[]              @relation("EngageCommentAuthor")
+  notifications                Notification[]               @relation("NotificationRecipient")
+  notificationsTriggered       Notification[]               @relation("NotificationActor")
+  tabPermissions               UserTabPermission[]          @relation("UserTabPermsOwner")
+  tabPermissionsUpdated        UserTabPermission[]          @relation("UserTabPermsUpdater")
+  notificationPolicy           EmployeeNotificationPolicy?  @relation("NotifPolicyOwner")
+  notificationPoliciesUpdated  EmployeeNotificationPolicy[] @relation("NotifPolicyUpdater")
+  auditLogs                    AuditLog[]                   @relation("AuditLogActor")
+  employeeExit                 EmployeeExit?                @relation("ExitUser")
+  exitsInitiated               EmployeeExit[]               @relation("ExitInitiator")
+  exitNotesAuthored            ExitNote[]                   @relation("ExitNoteAuthor")
+  exitTasksAssigned            ExitTask[]                   @relation("ExitTaskAssignee")
+  exitSettlementsFinalised     ExitSettlement[]             @relation("SettlementFinaliser")
+
+  // ── Hiring / ATS relations ──
+  jobsAsRecruiter      JobOpening[]              @relation("JobOpeningRecruiter")
+  jobsAsHiringManager  JobOpening[]              @relation("JobOpeningHiringManager")
+  jobsAsInterviewer    JobOpeningInterviewer[]   @relation("JobOpeningInterviewer")
+  // Restored 2026-06-12 — recruiter-pool back-relation for JobOpeningRecruiterJoin.
+  jobsInRecruiterPool  JobOpeningRecruiterJoin[] @relation("JobOpeningRecruiterJoinUser")
+  // Restored 2026-06-12 — hiring-manager-pool back-relation for JobOpeningHiringManagerJoin.
+  jobsInHiringManagerPool JobOpeningHiringManagerJoin[] @relation("JobOpeningHiringManagerJoinUser")
+  candidatesReferred   JobApplication[]          @relation("JobApplicationReferrer")
+  stageMovesMade       JobApplicationStage[]     @relation("StageMover")
+  interviewsAsPanelist InterviewPanelist[]       @relation("InterviewPanelist")
+  interviewScorecards  InterviewScorecard[]      @relation("InterviewerScorecard")
+  offersCreated        OfferLetter[]             @relation("OfferCreator")
+  candidateActivities  CandidateActivity[]       @relation("CandidateActivityActor")
+
+  // ── KPI document uploads ──
+  kpiDocumentsUploaded KpiDocument[] @relation("KpiDocumentUploader")
+
+  // ── WFH Policy (singleton updater) ──
+  wfhPolicyUpdates WfhPolicy[] @relation("WfhPolicyUpdater")
+
+  // ── HR dropdown option lists (restored 2026-06-12) ──
+  optionListsCreated OptionList[] @relation("OptionListCreator")
+
+  // ── Adhoc payroll line items (restored 2026-06-12) ──
+  adhocLineItems        AdhocLineItem[] @relation("AdhocLineItemUser")
+  adhocLineItemsCreated AdhocLineItem[] @relation("AdhocLineItemCreator")
+
+  // ── One-time bonus / perk payouts (restored 2026-06-12) ──
+  bonuses        EmployeeBonus[] @relation("EmployeeBonusUser")
+  bonusesCreated EmployeeBonus[] @relation("EmployeeBonusCreator")
+
+  // ── Legacy candidate-stage history (restored 2026-06-12) ──
+  candidateStageMoves CandidateStage[] @relation("CandidateStageMover")
+
+  // ── Scheduled (effective-dated) reporting-manager changes ──
+  managerChangesAsEmployee   ManagerChangeSchedule[] @relation("MgrChangeEmployee")
+  managerChangesAsNewManager ManagerChangeSchedule[] @relation("MgrChangeNewManager")
+
+  @@index([managerId])
+  @@index([inlineManagerId])
+  @@index([designationId])
+  // Pervasive `where: { isActive: true }` across org / managers / employees /
+  // payroll / attendance / scores — was an unindexed seq scan.
+  @@index([isActive])
+}
+
+// Effective-dated reporting-manager change. HR schedules a future
+// manager for an employee; the `reporting_manager_changes` daily cron
+// flips User.managerId on/after effectiveDate and marks the row applied.
+// Accessed via raw SQL in the API + cron (the typed client lags on the
+// dev/VPS box), so this model is the source of truth for migrations.
+model ManagerChangeSchedule {
+  id            Int       @id @default(autoincrement())
+  userId        Int       // employee whose reporting manager changes
+  newManagerId  Int       // the incoming reporting manager
+  effectiveDate DateTime  @db.Date // IST calendar day the change applies
+  status        String    @default("pending") // pending | applied | cancelled
+  note          String?
+  createdBy     Int? // HR/admin who scheduled it
+  createdAt     DateTime  @default(now())
+  appliedAt     DateTime?
+
+  user       User @relation("MgrChangeEmployee",  fields: [userId],       references: [id], onDelete: Cascade)
+  newManager User @relation("MgrChangeNewManager", fields: [newManagerId], references: [id], onDelete: Cascade)
+
+  @@index([status, effectiveDate])
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════
+// RBAC — designation-based permissions (replaces orgLevel/role)
+//
+// Permission keys are code-defined (src/lib/permissions/catalog.ts) and seeded
+// into `Permission` so the HR-Manager admin UI can list/describe them. The
+// GRANTS (DesignationPermission) are editable at runtime. User.designationId
+// points at the holder's designation, whose permissions resolve via `can()`.
+// ═══════════════════════════════════════════════════════
+
+model Permission {
+  id          Int      @id @default(autoincrement())
+  /// Matches a Permission literal in src/lib/permissions/catalog.ts.
+  key         String   @unique
+  label       String
+  description String?
+  category    String
+  sensitive   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  designations DesignationPermission[]
+}
+
+model Designation {
+  id                Int      @id @default(autoincrement())
+  /// Stable slug used in code/seed (e.g. "hr_manager", "video_editor").
+  key               String   @unique
+  /// Human-facing title shown in the UI (e.g. "HR Manager").
+  label             String
+  /// Optional rating track for the scorecard engine. Null = not rated by a
+  /// production scorecard. One of: writer|editor|qa|researcher|manager.
+  scorecardFunction String?
+  /// Brand the designation belongs to ("NB Media" | "YT Labs"). Each brand
+  /// shows only its own designations in the admin UI; clone copies across.
+  businessUnit      String?  @default("NB Media")
+  isActive          Boolean  @default(true)
+  sortOrder         Int      @default(0)
+  /// System designations are seeded to mirror legacy access. HR can edit them
+  /// but the UI blocks deletion so a built-in tier can't be removed by mistake.
+  isSystem          Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  permissions          DesignationPermission[]
+  reportAccessGrants   DesignationReportAccess[]
+  reportTemplateGrants DesignationReportTemplate[]
+  users                User[]
+}
+
+model DesignationPermission {
+  designationId Int
+  permissionId  Int
+  /// Audit trail: who granted this permission to this designation, and when.
+  grantedBy     Int?
+  createdAt     DateTime @default(now())
+
+  designation Designation @relation(fields: [designationId], references: [id], onDelete: Cascade)
+  permission  Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([designationId, permissionId])
+  @@index([permissionId])
+}
+
+// Per-designation grant to VIEW a report-owner's (manager's) weekly/monthly
+// reports. The designation-level replacement for per-user UserReportAccess:
+// every member of the designation can view the granted owners' reports.
+// Enforcement unions these with any legacy UserReportAccess rows.
+model DesignationReportAccess {
+  designationId Int
+  managerId     Int // report-owner User id
+  /// Audit trail: who granted this, and when.
+  grantedBy     Int?
+  createdAt     DateTime @default(now())
+
+  designation Designation @relation(fields: [designationId], references: [id], onDelete: Cascade)
+  manager     User        @relation("DesignationReportViewable", fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@id([designationId, managerId])
+  @@index([managerId])
+}
+
+// Which report templates a designation fills + can view (production|researcher|
+// qa|hr). Multiple per designation. Replaces the hardcoded name/role logic that
+// used to decide who fills which report — whoever holds the designation fills
+// (and views) its templates going forward.
+model DesignationReportTemplate {
+  designationId Int
+  template      String // 'production' | 'researcher' | 'qa' | 'hr'
+  /// Audit trail: who granted this, and when.
+  grantedBy     Int?
+  createdAt     DateTime @default(now())
+
+  designation Designation @relation(fields: [designationId], references: [id], onDelete: Cascade)
+
+  @@id([designationId, template])
+  @@index([template])
+}
+
+// ═══════════════════════════════════════════════════════
+// Dashboard product feedback (any authenticated user)
+// ═══════════════════════════════════════════════════════
+
+model UserFeedback {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category  String   @default("general_issue")
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Space {
+  id             Int      @id @default(autoincrement())
+  clickupSpaceId String   @unique
+  name           String
+  isSynced       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  capsules Capsule[]
+}
+
+model Capsule {
+  id              Int      @id @default(autoincrement())
+  clickupFolderId String   @unique
+  spaceId         Int
+  name            String
+  shortName       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  space           Space            @relation(fields: [spaceId], references: [id])
+  productionLists ProductionList[]
+}
+
+model ProductionList {
+  id            Int      @id @default(autoincrement())
+  clickupListId String   @unique
+  capsuleId     Int?
+  spaceId       Int?
+  name          String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  capsule Capsule? @relation(fields: [capsuleId], references: [id])
+  cases   Case[]
+}
+
+model Case {
+  id               Int     @id @default(autoincrement())
+  clickupTaskId    String  @unique
+  productionListId Int
+  name             String
+  status           String
+  statusType       String?
+  clickupUrl       String?
+
+  assigneeUserId   Int?
+  researcherUserId Int?
+  writerUserId     Int?
+  editorUserId     Int?
+
+  caseRating Decimal? @db.Decimal(3, 1)
+  caseType   String?
+  channel    String?
+
+  tthDocLink           String?
+  title                String? @db.Text
+  scriptFirstDraftLink String?
+  finalScriptLink      String?
+  voDocLink            String?
+  voLink               String?
+  videoFirstDraftLink  String?
+  finalVideoLink       String?
+
+  scriptQaStartDate     DateTime?
+  writerQualityScore    Int?
+  writerDeliveryTime    String?
+  writerEfficiencyScore String?
+  finalWriterRating     Decimal?  @db.Decimal(5, 2)
+  scriptQualityRating   Decimal?  @db.Decimal(4, 2)
+  scriptRatingReason    String?   @db.Text
+
+  videoGcStartDate      DateTime?
+  videoChangesCount     Int?
+  videoDuration         Int?
+  qaVideoMeetingDate    DateTime?
+  editorQualityScore    Int?
+  editorDeliveryTime    String?
+  editorEfficiencyScore String?
+  finalVideoRating      Decimal?  @db.Decimal(5, 2)
+  videoQualityRating    Decimal?  @db.Decimal(4, 2)
+  videoRatingReason     String?   @db.Text
+
+  helperEditorE Int?
+  helperEditorT Int?
+  helperWriterE Int?
+  helperWriterT Int?
+
+  uploadDate         DateTime?
+  caseStartDate      DateTime?
+  caseCompletionDate DateTime?
+  overallTat         Decimal?  @db.Decimal(5, 1)
+  tat                Decimal?  @db.Decimal(5, 1)
+  youtubeVideoUrl    String?
+
+  dateCreated     DateTime?
+  dateDone        DateTime?
+  lastSyncedAt    DateTime  @default(now())
+  isArchived      Boolean   @default(false)
+  /// Set by the sync when a level-3+ subtask (sub-subtask) is detected anywhere
+  /// under this case. Our schema only models Case → Subtask; anything deeper
+  /// can't be stored, so we surface the case for manual cleanup in ClickUp.
+  hasDeepSubtasks Boolean   @default(false)
+
+  productionList ProductionList    @relation(fields: [productionListId], references: [id])
+  assignee       User?             @relation("CaseAssignee", fields: [assigneeUserId], references: [id])
+  researcher     User?             @relation("CaseResearcher", fields: [researcherUserId], references: [id])
+  writer         User?             @relation("CaseWriter", fields: [writerUserId], references: [id])
+  editor         User?             @relation("CaseEditor", fields: [editorUserId], references: [id])
+  subtasks       Subtask[]
+  assignees      CaseAssignee[]
+  allEditors     CaseEditorEntry[]
+  allWriters     CaseWriterEntry[]
+  youtubeStats   YoutubeStats?
+
+  @@index([status])
+  @@index([statusType])
+  @@index([channel])
+  @@index([writerUserId])
+  @@index([editorUserId])
+  @@index([assigneeUserId])
+  @@index([researcherUserId])
+  @@index([productionListId])
+  @@index([dateCreated])
+}
+
+model CaseAssignee {
+  id            Int    @id @default(autoincrement())
+  caseId        Int
+  userId        Int
+  clickupUserId BigInt
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([caseId, userId])
+  @@index([caseId])
+  @@index([userId])
+}
+
+model CaseEditorEntry {
+  id            Int     @id @default(autoincrement())
+  caseId        Int
+  userId        Int
+  clickupUserId BigInt?
+  case          Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user          User    @relation(fields: [userId], references: [id])
+
+  @@unique([caseId, userId])
+  @@index([caseId])
+}
+
+model CaseWriterEntry {
+  id            Int     @id @default(autoincrement())
+  caseId        Int
+  userId        Int
+  clickupUserId BigInt?
+  case          Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user          User    @relation(fields: [userId], references: [id])
+
+  @@unique([caseId, userId])
+  @@index([caseId])
+}
+
+model Subtask {
+  id               Int       @id @default(autoincrement())
+  clickupTaskId    String    @unique
+  caseId           Int
+  name             String
+  status           String
+  statusType       String?
+  assigneeUserId   Int?
+  startDate        DateTime?
+  dueDate          DateTime?
+  dateDone         DateTime?
+  orderIndex       Int?
+  tat              Decimal?  @db.Decimal(7, 2)
+  customFieldsJson Json?     @db.JsonB
+  dateCreated      DateTime?
+  lastSyncedAt     DateTime  @default(now())
+
+  case      Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  assignee  User?             @relation("SubtaskAssignee", fields: [assigneeUserId], references: [id])
+  assignees SubtaskAssignee[]
+
+  @@index([caseId])
+  @@index([assigneeUserId])
+}
+
+model SubtaskAssignee {
+  id            Int    @id @default(autoincrement())
+  subtaskId     Int
+  userId        Int
+  clickupUserId BigInt
+
+  subtask Subtask @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([subtaskId, userId])
+  @@index([subtaskId])
+  @@index([userId])
+}
+
+model YoutubeStats {
+  id              Int       @id @default(autoincrement())
+  caseId          Int       @unique
+  youtubeVideoId  String
+  videoUrl        String
+  videoTitle      String?
+  viewCount       BigInt?
+  likeCount       BigInt?
+  commentCount    BigInt?
+  last30DaysViews BigInt?
+  publishedAt     DateTime?
+  lastFetchedAt   DateTime  @default(now())
+
+  case    Case                  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  history YoutubeStatsHistory[]
+
+  @@index([youtubeVideoId])
+}
+
+model YoutubeStatsHistory {
+  id             Int      @id @default(autoincrement())
+  youtubeStatsId Int
+  snapshotDate   DateTime @db.Date
+  viewCount      BigInt
+  likeCount      BigInt?
+
+  youtubeStats YoutubeStats @relation(fields: [youtubeStatsId], references: [id], onDelete: Cascade)
+
+  @@unique([youtubeStatsId, snapshotDate])
+}
+
+model MonthlyRating {
+  id                 Int      @id @default(autoincrement())
+  userId             Int
+  month              DateTime @db.Date
+  roleType           String
+  casesCompleted     Int      @default(0)
+  avgQualityScore    Decimal? @db.Decimal(5, 2)
+  avgDeliveryScore   Decimal? @db.Decimal(5, 2)
+  avgEfficiencyScore Decimal? @db.Decimal(5, 2)
+  totalViews         BigInt?
+  overallRating      Decimal? @db.Decimal(5, 2)
+  rankInRole         Int?
+  isManualOverride   Boolean  @default(false)
+  calculatedAt       DateTime @default(now())
+
+  // Per-parameter star ratings (1-5)
+  // Note: writerQualityStars / scriptQualityStars are kept for backward compat.
+  // For editors these map to editorQuality / videoQuality respectively.
+  // parametersJson is the authoritative breakdown — named columns are convenience only.
+  writerQualityStars   Decimal? @db.Decimal(3, 1)
+  scriptQualityStars   Decimal? @db.Decimal(3, 1)
+  ownershipStars       Decimal? @db.Decimal(3, 1)
+  monthlyTargetsStars  Decimal? @db.Decimal(3, 1)
+  ytViewsStars         Decimal? @db.Decimal(3, 1)
+  parametersJson       Json?    @db.JsonB // full calculation breakdown (authoritative)
+  manualRatingsPending Boolean  @default(true)
+
+  // Formula versioning — which template produced this result
+  formulaTemplateId Int?
+  formulaVersion    Int?
+
+  user            User             @relation(fields: [userId], references: [id])
+  editLogs        ScoreEditLog[]
+  formulaTemplate FormulaTemplate? @relation(fields: [formulaTemplateId], references: [id])
+
+  @@unique([userId, month, roleType])
+  @@index([month])
+  // Leaderboard + dashboard/company filter by roleType and order by
+  // overallRating desc — previously no supporting index.
+  @@index([roleType, overallRating])
+}
+
+model SyncLog {
+  id            Int       @id @default(autoincrement())
+  syncType      String
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+  recordsSynced Int?
+  errorsCount   Int?      @default(0)
+  errorDetails  Json?     @db.JsonB
+  status        String    @default("running")
+
+  @@index([syncType, status, completedAt]) // covers sync-status query
+  @@index([startedAt]) // covers dashboard lastSync query
+}
+
+model SyncConfig {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique // e.g. "selected_spaces", "selected_lists"
+  value     Json     @db.JsonB
+  updatedAt DateTime @updatedAt
+}
+
+model YtVideoLookup {
+  id             Int       @id @default(autoincrement())
+  youtubeVideoId String    @unique
+  videoUrl       String
+  title          String
+  viewCount      BigInt
+  likeCount      BigInt?
+  commentCount   BigInt?
+  publishedAt    DateTime?
+  fetchedAt      DateTime  @default(now())
+}
+
+/// YouTube dashboard: videos published on/after YT_DASHBOARD_PUBLISHED_SINCE, refreshed on cron (e.g. every 5h).
+model YoutubeDashboardVideo {
+  id             Int       @id @default(autoincrement())
+  youtubeVideoId String    @unique
+  channelId      String
+  channelName    String
+  title          String
+  publishedAt    DateTime?
+  viewCount      BigInt
+  likeCount      BigInt?
+  syncedAt       DateTime  @default(now())
+
+  @@index([channelId])
+  @@index([publishedAt])
+  @@index([syncedAt])
+}
+
+/// YouTube dashboard: per-channel quarter view totals from YouTube Analytics (refreshed on manual / cron sync).
+model YoutubeDashboardQuarterMetrics {
+  id                   Int      @id @default(autoincrement())
+  channelId            String
+  year                 Int
+  quarter              Int
+  analyticsStartStr    String
+  analyticsEndStr      String
+  viewsGainedInQuarter BigInt?
+  fetchedAt            DateTime @default(now()) @updatedAt
+
+  @@unique([channelId, year, quarter])
+  @@index([year, quarter])
+}
+
+model ChannelViewTarget {
+  id          Int      @id @default(autoincrement())
+  /// YouTube channel id (e.g. "UCjRdMPERN1T0LwAtnshS9UQ"). Matches YOUTUBE_CHANNELS env.
+  channelId   String
+  /// Display name cached at write time so the UI does not need to re-resolve from env.
+  channelName String
+  year        Int
+  /// 0 = year-level target. 1-4 = quarter target. One row per (channelId, year, quarter).
+  quarter     Int
+  /// Target view count. BigInt so 10M+ figures survive serialisation.
+  target      BigInt
+  updatedAt   DateTime @updatedAt
+  /// HR-admin who last set this. Null for legacy / seed rows.
+  updatedById Int?
+  updatedBy   User?    @relation("ChannelViewTargetUpdater", fields: [updatedById], references: [id])
+
+  @@unique([channelId, year, quarter])
+  @@index([year, quarter])
+}
+
+/// YouTube dashboard: per-channel 10-day bucket chart + uploads (filled on same cron as quarter metrics).
+model YoutubeDashboardChannelQuarterAnalysis {
+  id            Int      @id @default(autoincrement())
+  channelId     String
+  year          Int
+  quarter       Int
+  /// { analyticsStartStr, analyticsEndStr, buckets: [...], uploadsTotal }
+  chartJson     Json     @db.JsonB
+  headlineViews Int?
+  fetchedAt     DateTime @default(now()) @updatedAt
+
+  @@unique([channelId, year, quarter])
+  @@index([year, quarter])
+}
+
+/// ClickUp users whose email does not match any HR User. Populated by the sync job.
+/// Admin UI lists these so HR can decide whether to onboard them into the HR/attendance system.
+model ClickupUnmatchedUser {
+  id                Int      @id @default(autoincrement())
+  clickupUserId     BigInt   @unique
+  email             String
+  name              String?
+  profilePictureUrl String?
+  firstSeenAt       DateTime @default(now())
+  lastSeenAt        DateTime @updatedAt
+
+  @@index([email])
+}
+
+/// YouTube dashboard: cached per-user contribution per channel for a calendar quarter (see quarter-user-contribution).
+model YoutubeDashUserQuarterChannel {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  channelId  String
+  year       Int
+  quarter    Int
+  videoCount Int      @default(0)
+  viewsSum   BigInt   @default(0)
+  computedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId, year, quarter])
+  @@index([userId, year, quarter])
+  @@index([channelId, year, quarter])
+}
+
+model ScorecardConfig {
+  id            Int      @id @default(autoincrement())
+  userId        Int? // null = role-level default config
+  roleType      String // "writer", "editor", "qa_manager", etc.
+  layoutType    String // "production", "manager", "functional_manager", "individual"
+  metricsConfig Json     @db.JsonB // { metrics: [{name, label, weight, maxScore}], formula: "..." }
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@unique([userId, roleType])
+  @@index([roleType])
+}
+
+model ScoreEditLog {
+  id              Int      @id @default(autoincrement())
+  monthlyRatingId Int
+  fieldName       String // e.g. "overallRating", "avgQualityScore"
+  oldValue        String
+  newValue        String
+  editedBy        Int // userId of the person who edited
+  reason          String?
+  editedAt        DateTime @default(now())
+
+  monthlyRating MonthlyRating @relation(fields: [monthlyRatingId], references: [id], onDelete: Cascade)
+  editor        User          @relation("ScoreEditor", fields: [editedBy], references: [id])
+
+  @@index([monthlyRatingId])
+  @@index([editedBy])
+}
+
+model ManagerRating {
+  id           Int      @id @default(autoincrement())
+  managerId    Int // who submitted the rating
+  userId       Int // who was rated
+  period       String // "2026-03" (monthly) or "2026-W10" (weekly)
+  periodType   String // "weekly" | "monthly"
+  ratingsJson  Json     @db.JsonB // { "communication": 4, "teamwork": 5, ... }
+  overallScore Decimal? @db.Decimal(5, 2)
+  comments     String?  @db.Text
+  isDraft      Boolean  @default(false) // true = saved as draft, false = final submission
+  submittedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  manager User @relation("RatingManager", fields: [managerId], references: [id])
+  user    User @relation("RatedUser", fields: [userId], references: [id])
+
+  @@unique([managerId, userId, period, periodType])
+  @@index([userId])
+  @@index([managerId])
+  @@index([period])
+}
+
+/// Team members rate their manager (used in CM Pillar 5).
+/// Each team member submits one rating per period for their manager.
+/// The average across all team members is 50% of the combined pillar.
+model TeamManagerRating {
+  id           Int      @id @default(autoincrement())
+  teamMemberId Int // who submitted the rating (team member)
+  managerId    Int // who was rated (the CM/PM)
+  period       String // "2026-03"
+  periodType   String   @default("monthly")
+  ratingsJson  Json     @db.JsonB // { "team_q1": 4, "team_q2": 3, ... }
+  overallScore Decimal? @db.Decimal(5, 2)
+  comments     String?  @db.Text
+  isAnonymous  Boolean  @default(true)
+  submittedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  teamMember User @relation("TeamMemberRater", fields: [teamMemberId], references: [id])
+  manager    User @relation("ManagerRated", fields: [managerId], references: [id])
+
+  @@unique([teamMemberId, managerId, period, periodType])
+  @@index([managerId, period])
+  @@index([teamMemberId])
+}
+
+model RatingConfig {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique // e.g. "writer_weights", "writer_quality_brackets", "yt_views_brackets"
+  value     Json     @db.JsonB
+  updatedAt DateTime @updatedAt
+}
+
+model WeeklyReport {
+  id             Int      @id @default(autoincrement())
+  managerId      Int
+  week           Int // 1..N per month (Mon–Sun weeks; N usually 4–5)
+  month          Int // 0–11
+  year           Int
+  // Named columns replacing dataJson blob
+  writerRows     Json?    @db.JsonB // Section A1: Writer output rows
+  editorRows     Json?    @db.JsonB // Section A2: Editor output rows
+  researcherRows Json?    @db.JsonB // Section A3: Researcher performance rows
+  overviewRows   Json?    @db.JsonB // Section B: Quick overview rows
+  viewsRows      Json?    @db.JsonB // Section D: Views and Changes rows (Andrew)
+  shortsRows     Json?    @db.JsonB // Section E: Views and Changes (YT Shorts) rows (Andrew)
+  dataJson       Json?    @db.JsonB // Legacy fallback (kept for old records)
+  /// Which report template this row belongs to: production|researcher|qa|hr.
+  /// Backfilled from getManagerReportFormat for legacy rows; set explicitly on
+  /// new reports. Part of the row identity going forward (multi-template).
+  reportTemplate String?
+  /// Frozen team roster at submit/lock time so historical reports
+  /// keep showing who was on the team that week even if those users
+  /// later move to a different manager. Shape:
+  ///   Array<{ id: number, name: string, role: string, orgLevel: string | null, profilePictureUrl: string | null }>
+  /// Null on legacy rows submitted before this column existed — those
+  /// fall back to the live `manager.teamMembers` query.
+  teamSnapshot   Json?    @db.JsonB
+  isLocked       Boolean  @default(true)
+  submittedAt    DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  manager User @relation("ManagerWeeklyReports", fields: [managerId], references: [id])
+
+  @@unique([managerId, week, month, year])
+  // Template-inclusive identity (Phase A: added alongside the legacy key above).
+  @@unique([managerId, reportTemplate, week, month, year])
+  @@index([managerId])
+  @@index([year, month, week]) // covers ORDER BY year desc, month desc, week desc
+}
+
+model MonthlyReport {
+  id             Int      @id @default(autoincrement())
+  managerId      Int
+  month          Int // 0–11
+  year           Int
+  /// production|researcher|qa|hr — see WeeklyReport.reportTemplate.
+  reportTemplate String?
+  isLocked       Boolean  @default(false)
+  submittedAt    DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // ── Header (auto-filled, not user-typed) ──
+  reportingPeriod String? // e.g. "Mar 1 to Mar 31, 2026"
+
+  // ── Section 1: Executive Summary ──
+  executiveSummary String? @db.Text
+
+  // ── Section 2: Production Output ──
+  totalVideoTarget                String?
+  totalVideoActual                String?
+  totalVideoVariance              String?
+  heroContentTarget               String?
+  heroContentActual               String?
+  heroContentVariance             String?
+  // Override flags: when true, the actual was manually entered by a CEO/developer and
+  // must not be clobbered by auto-recompute. When false, actuals are recomputed from
+  // qualified CM Check 4 cases on every GET and persisted on every save.
+  totalVideoActualOverridden      Boolean @default(false)
+  heroContentActualOverridden     Boolean @default(false)
+  // Videos Published: count of cases in the manager's production lists with an
+  // uploadDate in the reporting window (day 4 → day 3 next month).
+  videosPublishedTarget           String?
+  videosPublishedActual           String?
+  videosPublishedVariance         String?
+  videosPublishedActualOverridden Boolean @default(false)
+  // Targets Completed (by Managers) — the manager-entered "what we actually
+  // achieved" number, distinct from the ClickUp-derived *Actual count. Sits
+  // between Actual ClickUp and Reason in the Section 2 / A Overall Output
+  // table; red-highlighted as a manual entry when filled.
+  totalVideoTargetAchieved        String?
+  heroContentTargetAchieved       String?
+  videosPublishedTargetAchieved   String?
+  editorNotes                     Json?   @db.JsonB // { [editorId]: "note text" }
+  writerNotes                     Json?   @db.JsonB // { [writerId]: "note text" }
+  // Manager-added cases that don't appear in the auto-detected list — used
+  // when work landed under the wrong owner or was completed offline.
+  // Shape: { [userId]: Array<{ id: string, name: string }> }
+  editorExtraCases                Json?   @db.JsonB
+  writerExtraCases                Json?   @db.JsonB
+
+  // ── Section 3: Shortfall Analysis ──
+  shortfallSummary String? @db.Text
+
+  // ── Section 4: Team Recognition ──
+  teamRecognition String? @db.Text
+
+  // ── Section 5: Key Learnings ──
+  keyLearning1 String? @db.Text
+  keyLearning2 String? @db.Text
+  keyLearning3 String? @db.Text
+
+  // ── Section 5B: Risks & Immediate Attention ──
+  risksAttention String? @db.Text
+
+  // ── Section 6: Behavioral Concerns (Optional & Confidential) ──
+  behavioralConcerns String? @db.Text
+
+  // ── Section 7: Remark (Optional) ──
+  remark String? @db.Text
+
+  // ── Nishant Bhatia monthly report (researcher format) ──
+  nishantResearcherRows Json? @db.JsonB // Array of researcher performance rows
+  nishantOverview       Json? @db.JsonB // Monthly overview summary row
+
+  // Andrew James monthly sections
+  andrewA1Rows Json? @db.JsonB // Section A1: QA Script review rows (Andrew/Muskan)
+  andrewA2Rows Json? @db.JsonB // Section A2: QA Video review rows (Abhishek)
+  andrewBRows  Json? @db.JsonB // Section B: Monthly overview rows
+  andrewCRows  Json? @db.JsonB // Section C: Rohini & Shika thumbnail rows
+  andrewDRows  Json? @db.JsonB // Section D: Views and Changes rows
+  andrewERows  Json? @db.JsonB // Section E: Views and Changes (YT Shorts) rows
+
+  // Tanvi Dogra HR Manager monthly report
+  hrMonthlyData Json? @db.JsonB // All HR monthly report sections
+
+  /// Frozen team roster at submit/lock time so historical reports
+  /// keep showing who was on the team that month even if those users
+  /// later move to a different manager. Shape matches WeeklyReport.teamSnapshot.
+  /// Null on legacy rows submitted before this column existed — those fall
+  /// back to the live `manager.teamMembers` query.
+  teamSnapshot Json? @db.JsonB
+
+  manager User @relation("ManagerMonthlyReports", fields: [managerId], references: [id])
+
+  @@unique([managerId, month, year])
+  // Template-inclusive identity (Phase A: added alongside the legacy key above).
+  @@unique([managerId, reportTemplate, month, year])
+  @@index([managerId])
+  @@index([year, month]) // covers ORDER BY year desc, month desc
+}
+
+model UserReportAccess {
+  id        Int @id @default(autoincrement())
+  userId    Int
+  managerId Int
+
+  viewer  User @relation("ReportViewer", fields: [userId], references: [id], onDelete: Cascade)
+  manager User @relation("ReportViewable", fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, managerId])
+  @@index([userId])
+  @@index([managerId])
+}
+
+model ChannelBaseline {
+  id            Int      @id @default(autoincrement())
+  channelName   String   @unique
+  baselineViews BigInt
+  updatedAt     DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════
+// Dynamic Formula Engine
+// ═══════════════════════════════════════════════════════
+
+/// Versioned formula template for a role (writer, editor, etc.)
+/// Each template defines sections (pillars), weights, and guardrails.
+/// Only ONE template per roleType should have isActive = true at a time.
+model FormulaTemplate {
+  id          Int     @id @default(autoincrement())
+  roleType    String // "writer" | "editor" | any future role
+  version     Int     @default(1)
+  isActive    Boolean @default(false)
+  label       String
+  description String?
+
+  /// Array of FormulaSection objects (see src/lib/ratings/types.ts)
+  sections Json @db.JsonB
+
+  /// Array of GuardrailRule objects (optional)
+  guardrails Json? @db.JsonB
+
+  /// Whether to round pillar star results to nearest integer (default true)
+  roundOff Boolean @default(true)
+
+  /// Optional: user IDs assigned to this template (for roles like researcher where
+  /// multiple sub-groups share the same UserRole but have different formulas).
+  /// When set, only these users are included in batch calculation for this template.
+  assignedUserIds Json? @db.JsonB // number[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  monthlyRatings MonthlyRating[]
+
+  @@unique([roleType, version])
+  @@index([roleType])
+  @@index([isActive])
+}
+
+// ═══════════════════════════════════════════════════════
+// Researcher Pipeline Snapshot (monthly RTC + FOIA counts from ClickUp)
+// One row per month — upserted on every sync so no duplicates.
+// ═══════════════════════════════════════════════════════
+
+model ResearcherPipelineSnapshot {
+  id                       Int      @id @default(autoincrement())
+  month                    DateTime @unique @db.Date // first day of month, e.g. 2026-03-01
+  rtcCount                 Int      @default(0)
+  foiaCount                Int      @default(0)
+  totalCount               Int      @default(0)
+  rtcCaseRatingAvg         Decimal? @db.Decimal(5, 2)
+  foiaCaseRatingAvg        Decimal? @db.Decimal(5, 2)
+  /// Parent-task count in "{Month} FOIA Pitched Cases" (ClickUp); pipeline target count still uses MonthlyReport.
+  foiaPitchedCount         Int      @default(0)
+  foiaPitchedCaseRatingAvg Decimal? @db.Decimal(5, 2)
+  caseRatingAvgCombined    Decimal? @db.Decimal(5, 2)
+  rtcListName              String?
+  foiaListName             String?
+  foiaPitchedListName      String?
+  snapshotData             Json?    @db.JsonB // optional raw details for audit
+  syncError                String? // last sync error message if any
+  syncedAt                 DateTime @default(now())
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([month])
+}
+
+// ═══════════════════════════════════════════════════════
+// System Violation Log
+// ═══════════════════════════════════════════════════════
+
+enum ViolationSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum ViolationStatus {
+  open
+  in_progress
+  paused
+  closed
+}
+
+model Violation {
+  id                  Int               @id @default(autoincrement())
+  userId              Int
+  reportedBy          Int
+  title               String            @default("")
+  description         String?           @db.Text
+  severity            ViolationSeverity @default(medium)
+  status              ViolationStatus   @default(open)
+  category            String? // violation type: "attendance", "misconduct", "policy_breach", etc.
+  actionTaken         String?           @db.Text
+  /// Legacy single-file columns. HR moved to multi-file uploads —
+  /// every new attachment lands in `ViolationActionFile` (see relation
+  /// `actionFiles` below). These four columns are kept nullable for
+  /// one transition release so unmigrated rows still display their
+  /// single-file uploads; new writes go to the side table.
+  actionTakenFileUrl  String?
+  actionTakenFileName String?
+  actionTakenFileBlob Bytes?
+  actionTakenFileMime String?
+  notes               String?           @db.Text
+  violationDate       DateTime?
+  responsiblePersonId Int?
+  resolvedAt          DateTime?
+  /// Last time the in-progress reminder email was sent. The cron uses
+  /// this to decide whether to fire another reminder (~ every 15 days).
+  /// Null = never reminded yet.
+  lastReminderAt      DateTime?
+  /// Stamped when the pre-resolution follow-up email is sent to the
+  /// reported employee's reporting manager (cron fires once at day 23
+  /// for any open / in_progress violation). Null = follow-up not yet
+  /// sent. Used both to dedupe the cron and to render the "follow-up
+  /// email sent" badge in the Admin → Violations card.
+  followUpSentAt      DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  user              User                  @relation("ViolationUser", fields: [userId], references: [id])
+  reporter          User                  @relation("ViolationReporter", fields: [reportedBy], references: [id])
+  responsiblePerson User?                 @relation("ViolationResponsible", fields: [responsiblePersonId], references: [id])
+  /// Multi-file Action-Taken attachments. The legacy single-file
+  /// fields above are kept nullable for one transition release so
+  /// unmigrated rows still display; every new upload lands here.
+  actionFiles       ViolationActionFile[]
+
+  @@index([userId])
+  @@index([reportedBy])
+  @@index([status])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+/// One uploaded Action-Taken document for a Violation. Bytes live in
+/// `fileBlob` (BYTEA) so they survive redeploys. Each row is keyed by
+/// its own integer id so the UI can remove an individual file and the
+/// download endpoint can stream a specific attachment by `?fileId=N`.
+model ViolationActionFile {
+  id           Int      @id @default(autoincrement())
+  violationId  Int
+  fileName     String
+  fileMime     String?
+  fileBlob     Bytes
+  uploadedAt   DateTime @default(now())
+  uploadedById Int?
+
+  violation  Violation @relation(fields: [violationId], references: [id], onDelete: Cascade)
+  uploadedBy User?     @relation("ViolationFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([violationId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Employee Profile
+// ═══════════════════════════════════════════════════════
+
+model EmployeeProfile {
+  id                      Int                  @id @default(autoincrement())
+  userId                  Int                  @unique
+  employeeId              String               @unique // Auto-allocated from numberSeries, e.g. "HRM1"
+  // ── Wizard Page 1: Basic Details ──
+  firstName               String
+  middleName              String?
+  lastName                String
+  workCountry             String               @default("India")
+  nationality             String
+  numberSeriesId          Int
+  numberSeries            EmployeeNumberSeries @relation(fields: [numberSeriesId], references: [id], onDelete: Restrict)
+  // ── Existing fields ──
+  designation             String?
+  department              String?
+  /// "Business Unit" the employee belongs to (e.g. "NB Media"). Free-text
+  /// since HR can extend the dropdown via the OptionList table — keep
+  /// nullable so legacy rows survive without backfill.
+  businessUnit            String?
+  employmentType          String               @default("fulltime") // fulltime | parttime | contract | intern
+  workLocation            String               @default("office") // office | remote | hybrid
+  joiningDate             DateTime?
+  phone                   String?
+  workPhone               String?
+  personalEmail           String?
+  dateOfBirth             DateTime?
+  gender                  String?
+  bloodGroup              String?
+  maritalStatus           String? // single | married | divorced | widowed
+  emergencyContact        String?
+  emergencyPhone          String?
+  address                 String?
+  city                    String?
+  state                   String?
+  noticePeriodDays        Int                  @default(30)
+  // ── Extended contact (mirrors Keka columns) ──
+  homePhone               String?
+  // ── Extended demographics ──
+  /// "Yes" | "No" — kept as a string for parity with the Keka export
+  /// column "Physically Handicapped"; nullable to allow legacy rows.
+  physicallyHandicapped   String?
+  // ── Address splits (mirrors Keka's Line 1 / Line 2 / Zip / Country) ──
+  // The legacy single `address` column above acts as Line 1; addressLine2
+  // is the new optional second line. addressPincode + addressCountry are
+  // strict additions — the existing `workCountry` is for the WORK location,
+  // not the residential one.
+  addressLine2            String?
+  addressPincode          String?
+  addressCountry          String?              @default("India")
+  // ── Permanent address (separate from current/correspondence above) ──
+  permanentLine1          String?
+  permanentLine2          String?
+  permanentCity           String?
+  permanentState          String?
+  permanentPincode        String?
+  permanentCountry        String?              @default("India")
+  // ── Family ──
+  motherName              String?
+  spouseName              String?
+  /// Comma-separated list of children's names — matches Keka export shape.
+  childrenNames           String?
+  // ── Emergency contact relationship (we already had name + phone) ──
+  emergencyRelationship   String?
+  // ── Policies / org extras ──
+  /// "On-Site" | "Remote" | "Hybrid" — Keka's attendance capture rule,
+  /// distinct from `workLocation` (the employee's work-mode preference)
+  /// and `jobLocation` (the city).
+  attendanceCaptureScheme String?
+  costCenter              String?
+  // ── Statutory IDs beyond PAN / Aadhaar ──
+  pfNumber                String?
+  uanNumber               String?
+  // ── Statutory: Provident Fund (PF) extras — drive the "Edit Statutory
+  //    Information" modal (Keka parity). Establishment IDs are company-level
+  //    EPF/PT registrations; stored per-employee so payroll knows which one
+  //    each employee is filed under. ──
+  pfEstablishmentId       String?
+  /// Employee is a member of EPS — contribution split across EPF & EPS.
+  pfEpsMember             Boolean              @default(true)
+  /// HR ticked "PF details not available / employee not eligible for PF".
+  pfNotEligible           Boolean              @default(false)
+  /// PF registration date (distinct from `joiningDate`).
+  pfJoinDate              DateTime?
+  /// Name on the PF account (may differ from the bank account holder).
+  pfAccountName           String?
+  // ── Statutory: Professional Tax (PT) ──
+  ptEstablishmentId       String?
+  // ── Biometric (IN-specific Keka field) ──
+  /// Free-text since some employees have a numeric biometric ID, others
+  /// have none ("Not Available") or a multi-part code.
+  biometricId             String?
+  // ── Payment Information (My Finances > Summary) ──
+  // Stored in plaintext for now; treat as PII — limit selects to the owning user / HR roles.
+  bankName                String?
+  bankAccountNumber       String?
+  bankIfsc                String?
+  bankBranch              String?
+  accountHolderName       String?
+  // ── Identity Information ──
+  panNumber               String?
+  parentName              String? // father's / spouse's name, as printed on the PAN card
+  aadhaarNumber           String?
+  aadhaarEnrollment       String?
+  // ── Extended onboarding fields (job + work settings) ──
+  // All optional so the column adds don't break legacy rows. The
+  // onboarding wizard captured these in the form already; before this
+  // migration they were thrown away. HR's Edit Profile reads/writes
+  // them now so every onboarding field is cross-checkable.
+  secondaryJobTitle       String?
+  legalEntity             String?
+  jobLocation             String? // City-level (Mohali / Delhi / Mumbai / Remote) — distinct from workLocation (office/remote/hybrid).
+  probationPolicy         String?
+  /// When probation begins. Defaults to the joining date for display, but
+  /// HR can set it explicitly (e.g. probation starting after an internship).
+  probationStartDate      DateTime? @db.Date
+  /// When the new hire's 3-month probation ends. Auto-set to
+  /// joiningDate + 3 months when an EmployeeProfile is created with a
+  /// joiningDate; HR can override per-employee from People →
+  /// Employment. Null = not on probation (legacy rows / confirmed).
+  probationEndDate        DateTime?
+  /// Dedupe stamp for the 7-day pre-end reminder email. Set by the
+  /// daily cron when the heads-up has been sent so it never fires
+  /// twice for the same probation window. HR clearing or extending
+  /// probationEndDate re-arms the reminder on the next eligible day.
+  probationReminderSentAt DateTime?
+  /// Set when probation is confirmed (Hire as Full-time, approved by HR).
+  /// Non-null = probation complete; the reminder sweep skips these.
+  probationConfirmedAt    DateTime?
+  /// HR user who approved the confirmation.
+  probationConfirmedById  Int?
+  /// Dedupe stamp for the in-app "probation review" nudge to the
+  /// reporting manager (parallel to probationReminderSentAt). Cleared
+  /// when probationEndDate changes so it re-arms on an extension.
+  probationManagerNotifiedAt DateTime?
+  /// ── Performance Improvement Plan (PIP) ──
+  /// Set when HR places the employee on a performance plan from the
+  /// profile ⋯ menu. The "ON PIP" badge (profile / directory / search)
+  /// shows while pipStartedAt is set and pipEndDate is today-or-future
+  /// (null end = open-ended). Clearing pipStartedAt removes the badge.
+  pipStartedAt            DateTime?
+  pipEndDate              DateTime?
+  pipReason               String?
+  pipReportedById         Int?
+  /// Dedupe stamps for the PIP-ending reminder email + the in-app
+  /// manager-review nudge (parallel to the probation* stamps). Cleared
+  /// when pipEndDate changes so they re-arm on an extension.
+  pipReminderSentAt       DateTime?
+  pipManagerNotifiedAt    DateTime?
+  /// Structured education history. Array of
+  /// { degree, institution, startOfCourse, endOfCourse, branch?, location? }
+  /// matching the JobApplication.educationDetails shape used by the
+  /// candidate apply form. Required for compliance (at least one
+  /// entry with degree + institution filled) — drives the
+  /// missing-docs cron alongside PAN / Aadhaar.
+  educationDetails        Json?
+  /// Compliance cron — first nudge stamped here when the cron has
+  /// sent the "your PAN / Aadhaar / education is missing" email.
+  /// 2 days after this fires AND docs still missing, the cron auto-
+  /// creates a Violation and stamps docViolationCreatedAt. Cleared
+  /// automatically when the employee becomes compliant so a future
+  /// regression triggers a fresh warn → escalate cycle.
+  docWarningSentAt        DateTime?
+  /// Compliance cron — set when the auto-violation has been created
+  /// for missing PAN / Aadhaar / education. Acts as a hard dedupe so
+  /// the cron never creates a second violation for the same gap.
+  /// Cleared when the employee becomes compliant.
+  docViolationCreatedAt   DateTime?
+  internshipEndDate       DateTime?
+  leavePlan               String?
+  holidayList             String?
+  weeklyOff               String?
+  attendanceNumber        String?
+  timeTrackingPolicy      String?
+  penalizationPolicy      String?
+  // ── ABOUT-tab bios (user-editable on /dashboard/hr/profile) ──
+  about                   String?
+  jobLove                 String?
+  hobbies                 String?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([department])
+  @@index([employmentType])
+  @@index([numberSeriesId])
+}
+
+// Named employee-ID sequences. Admins can add series; each has a prefix and an
+// auto-incrementing counter. Employee IDs are allocated as `{prefix}{nextNumber}`
+// inside a single UPDATE … RETURNING, so concurrent creates can't collide.
+model EmployeeNumberSeries {
+  id         Int      @id @default(autoincrement())
+  name       String   @unique
+  prefix     String
+  nextNumber Int      @default(1)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  profiles EmployeeProfile[]
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Shift & Attendance
+// ═══════════════════════════════════════════════════════
+
+model Shift {
+  id             Int      @id @default(autoincrement())
+  name           String   @unique
+  startTime      String // "09:00"
+  endTime        String // "18:00"
+  breakMinutes   Int      @default(60)
+  /// Grace minutes for a SECOND-HALF arrival (first-half leave/WFH day) —
+  /// applied on top of the shift mid-point when computing the half-day late
+  /// cutoff. Null → falls back to breakMinutes (the full-day grace).
+  /// The half boundary itself is always the mid-point of start/end.
+  halfDayGraceMinutes Int?
+  workDays       Json     @db.JsonB // ["Mon","Tue","Wed","Thu","Fri"]
+  // Saturday handling when "Sat" is in workDays:
+  //   "all"       — every Saturday works (default, back-compat).
+  //   "alternate" — every OTHER Saturday, anchored at each user's
+  //                 UserShift.effectiveFrom: the apply-week Saturday works,
+  //                 the next is off, then works, … continuously (ignores
+  //                 month boundaries / 5-Saturday months).
+  //   "weeks"     — only the week-of-month ordinals in saturdayWeeks
+  //                 (ceil(dayOfMonth/7) ∈ 1..5; e.g. [1,3] = 1st & 3rd).
+  saturdayPolicy String   @default("all")
+  saturdayWeeks  Int[]    @default([])
+  /// Brand scope ("NB Media" | "YT Labs" | null). Restored 2026-06-15 —
+  /// written via raw SQL but dropped from the DB by a past `prisma db
+  /// push`; re-added additively to match the live DB.
+  brand          String?
+  createdAt      DateTime @default(now())
+
+  userShifts UserShift[]
+}
+
+model UserShift {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique
+  shiftId       Int
+  effectiveFrom DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shift Shift @relation(fields: [shiftId], references: [id])
+
+  @@index([shiftId])
+}
+
+model Attendance {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  date            DateTime  @db.Date
+  clockIn         DateTime?
+  clockOut        DateTime?
+  totalMinutes    Int       @default(0)
+  status          String    @default("absent") // present | absent | late | half_day | on_leave | weekend | holiday | lop | half_day_lop | missed_clock_out
+  overtimeMinutes Int       @default(0)
+  ipAddress       String?
+  location        String?
+  isRegularized   Boolean   @default(false)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions AttendanceSession[]
+
+  @@unique([userId, date])
+  @@index([date])
+  @@index([status])
+}
+
+/// Per-punch session row. Each Attendance row can have many sessions
+/// (e.g. clock-in → lunch out → lunch in → clock-out = 2 sessions).
+/// totalMinutes on the parent Attendance row is re-derived from these
+/// sessions on every GET (see src/app/api/hr/attendance/route.ts:
+/// rederive()) — defensive against drift if a session is edited
+/// directly. This model was missing from prisma/schema.prisma for a
+/// long time even though production code already wrote to it; adding
+/// it here so future `prisma db push` runs never silently drop the
+/// table again.
+model AttendanceSession {
+  id               Int       @id @default(autoincrement())
+  attendanceId     Int
+  clockIn          DateTime
+  /// Null while the session is still open (clocked in, not yet out).
+  clockOut         DateTime?
+  /// JSON-stringified geo blob captured at clock-in (same shape as
+  /// Attendance.location). Stored per-session so multi-session days
+  /// can show where each individual punch happened.
+  clockInLocation  String?
+  clockOutLocation String?
+
+  attendance Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+
+  @@index([attendanceId])
+}
+
+/// Append-only log of every biometric door-OPEN (entry) scan from the terminal,
+/// including mid-day re-entries from break / washroom that do NOT affect
+/// clock-in/out or worked hours. Surfaced only to managers / HR / CEO /
+/// developers as an entry audit. Standalone (no relations) so it can never
+/// touch the attendance hours math; queried by userId + scannedAt range.
+model DoorEntry {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  /// Convenience link to the day's Attendance row when one already exists at
+  /// scan time (null for the day's very first scan, which creates it after).
+  attendanceId Int?
+  scannedAt    DateTime
+  source       String   @default("device")
+  createdAt    DateTime @default(now())
+
+  @@index([userId, scannedAt])
+  @@index([attendanceId])
+}
+
+// ═══════════════════════════════════════════════════════
+// MISSING FIELDS — ClickUp case data-quality flagging
+// ═══════════════════════════════════════════════════════
+
+/// Per-"capsule" plan: which Case fields are mandatory for cases in a given
+/// ProductionList (the team calls each list a "capsule" — C1, C2, ...).
+/// requiredFields is a JSON array of field keys (Case column names from
+/// src/lib/missing-fields/catalog.ts). Standalone — no FK — so it's read/written
+/// via raw SQL (same approach as DoorEntry, avoids a prisma generate cycle).
+/// One row per production list.
+model CapsuleFieldPlan {
+  id               Int      @id @default(autoincrement())
+  productionListId Int      @unique
+  requiredFields   Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now())
+}
+
+/// Run history for the Missing Fields tool — one row per "Run check". Standalone,
+/// raw-SQL accessed. `results` stores the flagged cases so a past run can be reviewed.
+model MissingFieldsRun {
+  id        Int      @id @default(autoincrement())
+  runAt     DateTime @default(now())
+  runByName String?
+  scanned   Int      @default(0)
+  flagged   Int      @default(0)
+  summary   Json     @default("{}")
+  results   Json     @default("[]")
+
+  @@index([runAt])
+}
+
+/// Single-row global config for the Missing Fields tool (id is always 1).
+/// activeListIds = the ProductionList ids the tool manages + scans ("capsules").
+/// inScopeStatuses = the Case.status strings a run should scan (everything else
+/// — rejected, published, etc. — is skipped).
+model MissingFieldsConfig {
+  id              Int      @id @default(autoincrement())
+  activeListIds   Json     @default("[]")
+  inScopeStatuses Json     @default("[]")
+  updatedAt       DateTime @default(now())
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Leave Management
+// ═══════════════════════════════════════════════════════
+
+model LeaveType {
+  id                 Int      @id @default(autoincrement())
+  name               String   @unique
+  code               String   @unique // "CL", "SL", "PL"
+  daysPerYear        Int      @default(12)
+  maxConsecutiveDays Int?
+  carryForward       Boolean  @default(false)
+  isPaid             Boolean  @default(true)
+  applicableGender   String   @default("all") // all | male | female
+  isActive           Boolean  @default(true)
+  // When false the balance is read-only — shown on the leave-balances
+  // grid for record-keeping but hidden from the apply-leave dropdown.
+  // Used for legacy / encashment-only buckets like Carry Over Leave
+  // that the company doesn't auto-credit anymore but still pays out
+  // at exit for old employees who already have a stored balance.
+  applicable         Boolean  @default(true)
+  // When true the type IS applyable but only by restricted-admin
+  // tier (CEO / HR Manager / isDeveloper) — server returns 403 for
+  // anyone else and the apply-form dropdown hides it. Lets HR drive
+  // sensitive types like Carry Over Leave from the on-behalf form
+  // without exposing them to regular employees.
+  adminOnly          Boolean  @default(false)
+  createdAt          DateTime @default(now())
+
+  balances      LeaveBalance[]
+  applications  LeaveApplication[]
+  policyEntries LeavePolicyEntry[]
+}
+
+// LeavePolicy + LeavePolicyEntry: configurable per-(policy × leave-type)
+// rules. Each user can be assigned to one LeavePolicy. When HR applies the
+// policy, the policy's entries become the user's LeaveBalance.totalDays
+// for the year. Monthly accrual reads the per-entry monthlyAccrual value
+// (replacing the old hardcoded SL +1 rule).
+model LeavePolicy {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entries LeavePolicyEntry[]
+  users   User[]
+}
+
+model LeavePolicyEntry {
+  id             Int      @id @default(autoincrement())
+  policyId       Int
+  leaveTypeId    Int
+  // Lump-sum entitlement granted at year start when HR applies the policy.
+  daysPerYear    Decimal  @default(0) @db.Decimal(5, 2)
+  // Additional days credited at the start of each calendar month, on top of
+  // whatever totalDays is. Zero = pure lump-sum type.
+  monthlyAccrual Decimal  @default(0) @db.Decimal(5, 2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  policy    LeavePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  leaveType LeaveType   @relation(fields: [leaveTypeId], references: [id])
+
+  @@unique([policyId, leaveTypeId])
+  @@index([policyId])
+  @@index([leaveTypeId])
+}
+
+model HolidayCalendar {
+  id        Int      @id @default(autoincrement())
+  year      Int
+  date      DateTime @db.Date
+  name      String
+  type      String   @default("public") // public | company | optional
+  createdAt DateTime @default(now())
+
+  @@unique([year, date])
+  @@index([year])
+}
+
+model LeaveBalance {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  leaveTypeId      Int
+  year             Int
+  // Decimal(6,2) so HR-entered values like 1.68 survive intact —
+  // Decimal(5,1) was rounding everything to 1 decimal at storage,
+  // which broke Carry Over Leave (HR enters precise carry-forward
+  // figures that get paid out at exit).
+  totalDays        Decimal  @default(0) @db.Decimal(6, 2)
+  usedDays         Decimal  @default(0) @db.Decimal(6, 2)
+  pendingDays      Decimal  @default(0) @db.Decimal(6, 2)
+  /// Last YYYY-MM in which monthly accrual ran for this row. Used to
+  /// keep Sick Leave's "+1 day per month" idempotent — re-runs in the
+  /// same month are no-ops.
+  lastAccrualMonth String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id])
+
+  @@unique([userId, leaveTypeId, year])
+  @@index([userId])
+}
+
+model LeaveApplication {
+  id                Int       @id @default(autoincrement())
+  userId            Int
+  leaveTypeId       Int
+  fromDate          DateTime  @db.Date
+  toDate            DateTime  @db.Date
+  totalDays         Decimal   @db.Decimal(5, 1)
+  reason            String    @db.Text
+  // pending -> partially_approved (after stage-1 mgr) -> approved (after stage-2 CEO/HR) | rejected | cancelled
+  status            String    @default("pending")
+  // Stage 1 — manager approval
+  approvedById      Int?
+  approvedAt        DateTime?
+  approvalNote      String?
+  // Stage 2 — CEO / HR manager final approval
+  finalApprovedById Int?
+  finalApprovedAt   DateTime?
+  finalApprovalNote String?
+  // Optional list of users the applicant asked to notify (Notify picker on form)
+  notifyUserIds     Int[]     @default([])
+  // Handoff fields — required by the company's standard leave-application
+  // format. POC is the person covering the requester while they're out;
+  // workStatus is a free-text summary of pending tasks.
+  pocUserId         Int?
+  workStatus        String?   @db.Text
+  appliedAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user          User      @relation("LeaveApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  leaveType     LeaveType @relation(fields: [leaveTypeId], references: [id])
+  approver      User?     @relation("LeaveApprover", fields: [approvedById], references: [id])
+  finalApprover User?     @relation("LeaveFinalApprover", fields: [finalApprovedById], references: [id])
+  poc           User?     @relation("LeavePOC", fields: [pocUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([fromDate, toDate])
+  @@index([pocUserId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Announcements
+// ═══════════════════════════════════════════════════════
+
+model Announcement {
+  id         Int       @id @default(autoincrement())
+  title      String
+  body       String    @db.Text
+  type       String    @default("all") // all | department | team
+  targetId   String? // dept name or manager id
+  isPinned   Boolean   @default(false)
+  publishAt  DateTime  @default(now())
+  expiresAt  DateTime?
+  postedById Int
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  postedBy User               @relation(fields: [postedById], references: [id])
+  reads    AnnouncementRead[]
+
+  @@index([type])
+  @@index([publishAt])
+}
+
+model AnnouncementRead {
+  id             Int      @id @default(autoincrement())
+  announcementId Int
+  userId         Int
+  readAt         DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+}
+
+// ═══════════════════════════════════════════════════════
+// Per-user tab permissions — HR can toggle which sidebar
+// tabs each employee can see/reach. Admins flip booleans
+// from /dashboard/hr/admin/permissions.
+// ═══════════════════════════════════════════════════════
+model UserTabPermission {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  tabKey    String // matches TAB_KEYS in src/lib/permissions/tabs.ts
+  enabled   Boolean
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  updatedBy Int? // who last flipped the toggle
+
+  user    User  @relation("UserTabPermsOwner", fields: [userId], references: [id], onDelete: Cascade)
+  updater User? @relation("UserTabPermsUpdater", fields: [updatedBy], references: [id])
+
+  @@unique([userId, tabKey])
+  @@index([userId])
+}
+
+// Per-employee override for attendance + payroll email/processing.
+// Absence of a row = use role-based defaults (CEO and Developers default
+// to BOTH disabled; everyone else defaults to BOTH enabled). An explicit
+// row always wins, so HR can grant attendance emails to the CEO if they
+// want them back. Wired into the daily reminder + 10:05 summary jobs in
+// src/lib/hr/missed-attendance-emails.ts.
+model EmployeeNotificationPolicy {
+  id                Int      @id @default(autoincrement())
+  userId            Int      @unique
+  attendanceEnabled Boolean  @default(true)
+  payrollEnabled    Boolean  @default(true)
+  updatedById       Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user    User  @relation("NotifPolicyOwner", fields: [userId], references: [id], onDelete: Cascade)
+  updater User? @relation("NotifPolicyUpdater", fields: [updatedById], references: [id])
+
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Asset Management
+// ═══════════════════════════════════════════════════════
+
+model Asset {
+  id           Int       @id @default(autoincrement())
+  name         String
+  category     String // laptop | camera | phone | microphone | other
+  serialNumber String?
+  purchaseDate DateTime?
+  currentValue Decimal?  @db.Decimal(10, 2)
+  condition    String    @default("good") // new | good | fair | poor
+  status       String    @default("available") // available | assigned | in_repair | retired
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  assignments AssetAssignment[]
+
+  @@index([status])
+  @@index([category])
+}
+
+model AssetAssignment {
+  id                Int       @id @default(autoincrement())
+  assetId           Int
+  userId            Int
+  assignedAt        DateTime  @default(now())
+  returnedAt        DateTime?
+  conditionOnAssign String?
+  conditionOnReturn String?
+  notes             String?
+
+  asset Asset @relation(fields: [assetId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@index([assetId])
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Document Management
+// ═══════════════════════════════════════════════════════
+
+model EmployeeDocument {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  category     String // offer_letter | id_proof | pan_card | aadhar | education_certificate | contract | payslip | experience_letter | other
+  fileName     String
+  /// Legacy external URL (used for the old API). New uploads store
+  /// content in `fileBlob` and HR serves it via /api/hr/documents/:id/file.
+  fileUrl      String
+  /// File bytes for the new upload path. The serve endpoint reads
+  /// this column and streams it with fileMime as Content-Type. Null
+  /// for pre-migration rows that still rely on fileUrl.
+  fileBlob     Bytes?
+  /// Content-Type of the uploaded blob. e.g. "application/pdf",
+  /// "image/png". Null for legacy fileUrl rows.
+  fileMime     String?
+  uploadedById Int
+  expiryDate   DateTime?
+  isVerified   Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  user       User @relation("DocOwner", fields: [userId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation("DocUploader", fields: [uploadedById], references: [id])
+
+  @@index([userId])
+  @@index([category])
+}
+
+/// Letter/document generated for a NEW JOINER not yet in the DB
+/// (manual-entry mode in the letter generator). Parked here keyed by
+/// email; when a User with that email is created, attachPendingDocuments
+/// copies it into EmployeeDocument (their Documents tab). Accessed via
+/// raw SQL (the typed client lags), so this model is the source of truth
+/// for migrations.
+model PendingDocument {
+  id             Int       @id @default(autoincrement())
+  email          String // match key (compared case-insensitively)
+  fullName       String?
+  category       String    @default("employee_letter")
+  templateKey    String?
+  fileName       String
+  fileBlob       Bytes
+  fileMime       String    @default("application/pdf")
+  brand          String?
+  createdById    Int?
+  createdAt      DateTime  @default(now())
+  attachedUserId Int?
+  attachedAt     DateTime?
+
+  @@index([email])
+  @@index([attachedUserId])
+}
+
+/// Reporting-manager's probation review at the end of an employee's
+/// probation. The manager records a recommendation (extend / confirm as
+/// full-time / end employment) + required feedback from My Team →
+/// Probation Reviews; HR approves or rejects it from the dashboard, and
+/// the approval applies the action. Raw-SQL accessed (the typed client
+/// lags), so this model is the migration source of truth.
+model ProbationReview {
+  id              Int       @id @default(autoincrement())
+  employeeUserId  Int
+  managerId       Int
+  recommendation  String // extend | confirm | end
+  extendMonths    Int? // 1 | 3 | 6 (extend only; null = custom date)
+  proposedEndDate DateTime? // custom extend target
+  feedback        String    @db.Text
+  status          String    @default("pending") // pending | approved | rejected
+  hrNote          String?   @db.Text
+  decidedById     Int?
+  decidedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status])
+  @@index([employeeUserId])
+  @@index([managerId])
+}
+
+/// Performance Improvement Plan (PIP) review — reporting-manager
+/// recommendation + HR approval. Mirrors ProbationReview.
+model PerformancePlanReview {
+  id              Int       @id @default(autoincrement())
+  employeeUserId  Int
+  managerId       Int
+  recommendation  String // extend | pass | end
+  extendMonths    Int? // 1 | 3 | 6 (extend only; null = custom date)
+  proposedEndDate DateTime? // custom extend target
+  feedback        String    @db.Text
+  status          String    @default("pending") // pending | approved | rejected
+  hrNote          String?   @db.Text
+  decidedById     Int?
+  decidedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status])
+  @@index([employeeUserId])
+  @@index([managerId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Helpdesk / HR Tickets
+// ═══════════════════════════════════════════════════════
+
+model Ticket {
+  id           Int       @id @default(autoincrement())
+  subject      String
+  description  String    @db.Text
+  category     String // payroll | leave | it_support | document_request | policy | other
+  priority     String    @default("medium") // low | medium | high | urgent
+  raisedById   Int
+  assignedToId Int?
+  status       String    @default("open") // open | in_progress | resolved | closed
+  dueAt        DateTime?
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  raisedBy   User            @relation("TicketRaiser", fields: [raisedById], references: [id])
+  assignedTo User?           @relation("TicketAssignee", fields: [assignedToId], references: [id])
+  comments   TicketComment[]
+
+  @@index([raisedById])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([priority])
+}
+
+model TicketComment {
+  id        Int      @id @default(autoincrement())
+  ticketId  Int
+  authorId  Int
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User   @relation(fields: [authorId], references: [id])
+
+  @@index([ticketId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Performance / Goals (OKR)
+// ═══════════════════════════════════════════════════════
+
+model GoalCycle {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique // "Q1 2026", "Annual 2026"
+  cycleType String   @default("quarterly") // quarterly | annual | custom
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  goals Goal[]
+}
+
+model Goal {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?   @db.Text
+  ownerId     Int
+  cycleId     Int
+  visibility  String    @default("personal") // personal | team | company
+  status      String    @default("on_track") // on_track | at_risk | behind | completed
+  progress    Int       @default(0) // 0-100 %
+  startDate   DateTime? @db.Date
+  endDate     DateTime? @db.Date
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner      User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  cycle      GoalCycle   @relation(fields: [cycleId], references: [id])
+  keyResults KeyResult[]
+
+  @@index([ownerId])
+  @@index([cycleId])
+  @@index([status])
+}
+
+model KeyResult {
+  id           Int      @id @default(autoincrement())
+  goalId       Int
+  title        String
+  targetValue  Decimal  @default(100) @db.Decimal(10, 2)
+  currentValue Decimal  @default(0) @db.Decimal(10, 2)
+  unit         String   @default("%") // %, count, currency, boolean
+  progress     Int      @default(0) // 0-100, auto-computed on update
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Expenses & Travel
+// ═══════════════════════════════════════════════════════
+
+model Expense {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  title        String
+  category     String // travel | food | accommodation | equipment | communication | other
+  amount       Decimal   @db.Decimal(10, 2)
+  currency     String    @default("INR")
+  expenseDate  DateTime  @db.Date
+  receiptUrl   String?
+  description  String?   @db.Text
+  status       String    @default("pending") // pending | approved | rejected | paid
+  approvedById Int?
+  approvalNote String?
+  paidAt       DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  approvedBy User? @relation("ExpenseApprover", fields: [approvedById], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([expenseDate])
+}
+
+model TravelRequest {
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  purpose       String
+  fromLocation  String
+  toLocation    String
+  travelDate    DateTime  @db.Date
+  returnDate    DateTime? @db.Date
+  estimatedCost Decimal?  @db.Decimal(10, 2)
+  advanceNeeded Boolean   @default(false)
+  advanceAmount Decimal?  @db.Decimal(10, 2)
+  status        String    @default("pending") // pending | approved | rejected | completed
+  approvedById  Int?
+  approvalNote  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  approvedBy User? @relation("TravelApprover", fields: [approvedById], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Payroll
+// ═══════════════════════════════════════════════════════
+
+model SalaryStructure {
+  id                  Int      @id @default(autoincrement())
+  userId              Int      @unique
+  /// "regular" for full-time / contract / permanent payroll, "intern" for
+  /// flat-stipend interns (only `basic` is meaningful in that case).
+  salaryType          String   @default("regular")
+  payGroup            String?
+  bonusIncluded       Boolean  @default(false)
+  taxRegime           String?
+  /// "Range Based" or "Fixed" — mirrors the form selector.
+  structureType       String?
+  pfEligible          Boolean  @default(false)
+  ctc                 Decimal  @db.Decimal(12, 2)
+  /// Earnings components. All stored as ANNUAL figures (payslip divides by 12).
+  /// Split rule for regular employees:
+  ///   Basic = 50% of CTC
+  ///   HRA   = 20% of CTC
+  ///   DA    = 10% of CTC
+  ///   Conv  =  7.5% of CTC
+  ///   Medical = fixed ₹15,000/year (₹1,250/month)
+  ///   PF Employee = fixed ₹21,600/year (₹1,800/month) when pfEligible
+  ///   Special Allowance = whatever balances to CTC
+  basic               Decimal  @db.Decimal(12, 2)
+  hra                 Decimal  @db.Decimal(12, 2)
+  dearnessAllowance   Decimal  @default(0) @db.Decimal(12, 2)
+  conveyanceAllowance Decimal  @default(0) @db.Decimal(12, 2)
+  medicalAllowance    Decimal  @default(0) @db.Decimal(12, 2)
+  specialAllowance    Decimal  @default(0) @db.Decimal(12, 2)
+  pfEmployee          Decimal  @default(0) @db.Decimal(12, 2)
+  pfEmployer          Decimal  @default(0) @db.Decimal(12, 2)
+  esiEmployee         Decimal  @default(0) @db.Decimal(12, 2)
+  esiEmployer         Decimal  @default(0) @db.Decimal(12, 2)
+  tds                 Decimal  @default(0) @db.Decimal(12, 2)
+  professionalTax     Decimal  @default(0) @db.Decimal(10, 2)
+  effectiveFrom       DateTime @db.Date
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payslips Payslip[]
+
+  @@index([userId])
+}
+
+/// Superseded SalaryStructure snapshots — one row per PAST structure, written
+/// when HR revises a salary (the CURRENT structure still lives in
+/// SalaryStructure, unchanged). Enables mid-month proration: for a run month
+/// that contains a revision's effectiveFrom, the days BEFORE it are paid at the
+/// history row whose [effectiveFrom, effectiveTo) window covers them, and the
+/// days on/after at the current structure. Purely ADDITIVE — no existing table
+/// or row is touched, so payroll for anyone without history behaves exactly as
+/// before. Not linked via a Prisma relation (plain userId + index) to keep the
+/// change isolated to this model.
+model SalaryStructureHistory {
+  id                  Int      @id @default(autoincrement())
+  userId              Int
+  salaryType          String   @default("regular")
+  ctc                 Decimal  @db.Decimal(12, 2)
+  basic               Decimal  @db.Decimal(12, 2)
+  hra                 Decimal  @db.Decimal(12, 2)
+  dearnessAllowance   Decimal  @default(0) @db.Decimal(12, 2)
+  conveyanceAllowance Decimal  @default(0) @db.Decimal(12, 2)
+  medicalAllowance    Decimal  @default(0) @db.Decimal(12, 2)
+  specialAllowance    Decimal  @default(0) @db.Decimal(12, 2)
+  pfEmployee          Decimal  @default(0) @db.Decimal(12, 2)
+  pfEligible          Boolean  @default(false)
+  professionalTax     Decimal  @default(0) @db.Decimal(10, 2)
+  /// The [effectiveFrom, effectiveTo) window this structure was in force.
+  /// effectiveTo = the succeeding structure's effectiveFrom (exclusive).
+  effectiveFrom       DateTime @db.Date
+  effectiveTo         DateTime @db.Date
+  createdAt           DateTime @default(now())
+
+  @@index([userId, effectiveFrom])
+  @@index([userId, effectiveTo])
+}
+
+model PayrollRun {
+  id          Int       @id @default(autoincrement())
+  month       Int // 0-11
+  year        Int
+  // draft -> generated -> locked -> paid. `locked` means HR has frozen
+  // the numbers and sent the batch to finance. `paid` means finance has
+  // confirmed money is out — only then do employees see their payslips.
+  //
+  // NOTE: these top-level lifecycle columns are now the LEGACY / whole-run
+  // baseline. A PayrollRun is one row per month shared by both brands, so
+  // the real per-brand lifecycle lives in `brandStatus` (below). These
+  // columns are only read as a fallback when a brand has no slice yet.
+  status      String    @default("draft")
+  runBy       Int
+  lockedAt    DateTime?
+  lockedBy    Int?
+  paidAt      DateTime?
+  paidBy      Int?
+  // Per-brand lock lifecycle — { "NB Media": { status, lockedAt, lockedBy,
+  // paidAt, paidBy }, "YT Labs": {...} }. One PayrollRun row is shared by
+  // both brands (payslips + stepStates are per-brand slices), so the
+  // status/lock must be per-brand too — else locking one brand would lock
+  // the other. Read via lib/hr/payroll-run-status.readBrandStatus, which
+  // falls back to the legacy top-level columns when a brand slice is absent.
+  brandStatus Json      @default("{}")
+  totalCTC    Decimal   @default(0) @db.Decimal(14, 2)
+  totalNetPay Decimal   @default(0) @db.Decimal(14, 2)
+  // Per-outer-step completion state for the 6-card Run Payroll wizard.
+  // Keys are step numbers as strings ("1".."6"); values are
+  // "pending" | "complete". Populated as HR clicks "Mark as Complete"
+  // inside each step's side-panel.
+  stepStates  Json      @default("{}")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  payslips Payslip[]
+
+  @@unique([month, year])
+  @@index([status])
+}
+
+model Payslip {
+  id                Int      @id @default(autoincrement())
+  userId            Int
+  payrollRunId      Int
+  salaryStructureId Int
+  month             Int
+  year              Int
+  // workingDays = calendar days in the run month (28/30/31). presentDays
+  // is the "paid days" count (calendar days − LOP); both presentDays and
+  // lopDays are Decimal so half-day attendance contributes 0.5.
+  workingDays       Int      @default(30)
+  presentDays       Decimal  @default(0) @db.Decimal(5, 1)
+  lopDays           Decimal  @default(0) @db.Decimal(5, 1)
+  grossEarnings     Decimal  @db.Decimal(12, 2)
+  totalDeductions   Decimal  @db.Decimal(12, 2)
+  netPay            Decimal  @db.Decimal(12, 2)
+  bonus             Decimal  @default(0) @db.Decimal(12, 2)
+  tds               Decimal  @default(0) @db.Decimal(12, 2)
+  pfEmployee        Decimal  @default(0) @db.Decimal(12, 2)
+  professionalTax   Decimal  @default(0) @db.Decimal(10, 2)
+  // Fixed ₹200/month deduction for non-intern employees. Placeholder
+  // name — to be renamed once the exact tax (LWF / city tax / etc.) is
+  // confirmed. Interns store 0.
+  additionalTax     Decimal  @default(0) @db.Decimal(10, 2)
+  status            String   @default("generated") // generated | sent | acknowledged
+  // Per-payslip salary-type snapshot ("regular" | "intern"). Null = use the
+  // linked SalaryStructure's type (back-compat for existing rows). Captured
+  // per month so a later structure change (e.g. an intern→regular conversion)
+  // can't retro-relabel an already-locked payslip.
+  salaryType        String?
+  createdAt         DateTime @default(now())
+
+  user            User            @relation(fields: [userId], references: [id])
+  payrollRun      PayrollRun      @relation(fields: [payrollRunId], references: [id])
+  salaryStructure SalaryStructure @relation(fields: [salaryStructureId], references: [id])
+
+  @@unique([userId, month, year])
+  @@index([userId])
+  @@index([payrollRunId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Engage (Social Feed)
+// ═══════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Attendance Regularization
+// ═══════════════════════════════════════════════════════
+
+model AttendanceRegularization {
+  id                Int       @id @default(autoincrement())
+  userId            Int
+  date              DateTime  @db.Date
+  requestedIn       DateTime?
+  requestedOut      DateTime?
+  reason            String    @db.Text
+  // pending -> partially_approved (after L1 manager) -> approved (after L2 final) | rejected | cancelled
+  status            String    @default("pending")
+  // Stage 1 — direct manager (L1)
+  approvedById      Int?
+  approvedAt        DateTime?
+  approvalNote      String?
+  // Stage 2 — grand-manager in chain OR CEO / HR manager (hybrid)
+  finalApprovedById Int?
+  finalApprovedAt   DateTime?
+  finalApprovalNote String?
+  // Admin emergency grant — set to the CEO/Developer/HR who created this on behalf of the user.
+  // Null for normal self-applied requests. On-book: still counts toward monthly total.
+  grantedByAdminId  Int?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user           User  @relation("RegularizationUser", fields: [userId], references: [id], onDelete: Cascade)
+  approver       User? @relation("RegularizationApprover", fields: [approvedById], references: [id])
+  finalApprover  User? @relation("RegularizationFinalApprover", fields: [finalApprovedById], references: [id])
+  grantedByAdmin User? @relation("RegularizationGrantedBy", fields: [grantedByAdminId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([date])
+}
+
+model WFHRequest {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  date           DateTime @db.Date
+  reason         String   @db.Text
+  status         String   @default("pending")
+  approvedById   Int?
+  approvalNote   String?
+  // Handoff fields — company-standard WFH format.
+  pocUserId      Int?
+  workStatus     String?  @db.Text
+  unavailability String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation("WFHUser", fields: [userId], references: [id], onDelete: Cascade)
+  approver       User?    @relation("WFHApprover", fields: [approvedById], references: [id])
+  poc            User?    @relation("WFHPOC", fields: [pocUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([date])
+  @@index([status])
+  @@index([pocUserId])
+}
+
+model OnDutyRequest {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  date         DateTime  @db.Date
+  fromTime     DateTime?
+  toTime       DateTime?
+  purpose      String    @db.Text
+  location     String?
+  status       String    @default("pending")
+  approvedById Int?
+  approvalNote String?
+  // Handoff fields — company-standard request format.
+  pocUserId    Int?
+  workStatus   String?   @db.Text
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation("OnDutyUser", fields: [userId], references: [id], onDelete: Cascade)
+  approver     User?     @relation("OnDutyApprover", fields: [approvedById], references: [id])
+  poc          User?     @relation("OnDutyPOC", fields: [pocUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([date])
+  @@index([status])
+  @@index([pocUserId])
+}
+
+model CompOffRequest {
+  id           Int       @id @default(autoincrement())
+  userId       Int
+  workedDate   DateTime  @db.Date
+  creditDays   Decimal   @default(1) @db.Decimal(3, 1)
+  reason       String    @db.Text
+  status       String    @default("pending")
+  approvedById Int?
+  approvalNote String?
+  isUtilized   Boolean   @default(false)
+  expiryDate   DateTime? @db.Date
+  // Handoff fields — company-standard request format.
+  pocUserId    Int?
+  workStatus   String?   @db.Text
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation("CompOffUser", fields: [userId], references: [id], onDelete: Cascade)
+  approver     User?     @relation("CompOffApprover", fields: [approvedById], references: [id])
+  poc          User?     @relation("CompOffPOC", fields: [pocUserId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([pocUserId])
+}
+
+model EngagePost {
+  id         Int      @id @default(autoincrement())
+  authorId   Int
+  type       String   @default("post") // post | poll | praise
+  content    String
+  praiseToId Int? // for praise type
+  scope      String   @default("org") // org | department
+  department String?
+  mediaUrl   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  author    User             @relation("EngageAuthor", fields: [authorId], references: [id])
+  praiseTo  User?            @relation("EngagePraiseTo", fields: [praiseToId], references: [id])
+  reactions EngageReaction[]
+  comments  EngageComment[]
+
+  @@index([authorId])
+  @@index([createdAt])
+}
+
+model EngageReaction {
+  id     Int    @id @default(autoincrement())
+  postId Int
+  userId Int
+  emoji  String @default("👍")
+
+  post EngagePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User       @relation(fields: [userId], references: [id])
+
+  @@unique([postId, userId])
+}
+
+model EngageComment {
+  id        Int      @id @default(autoincrement())
+  postId    Int
+  authorId  Int
+  content   String
+  createdAt DateTime @default(now())
+
+  post   EngagePost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User       @relation("EngageCommentAuthor", fields: [authorId], references: [id])
+
+  @@index([postId])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Notifications (approval fan-out for HR requests)
+// ═══════════════════════════════════════════════════════
+//
+// `type` is one of: regularization | wfh | on_duty | leave | comp_off | travel | expense
+// `entityId` is the id of the originating request (e.g. AttendanceRegularization.id)
+// `actorId` is the requester (who triggered the notification)
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int // recipient
+  actorId   Int? // requester / trigger
+  type      String
+  entityId  Int?
+  title     String
+  body      String?   @db.Text
+  linkUrl   String?
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user  User  @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  actor User? @relation("NotificationActor", fields: [actorId], references: [id])
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════
+// AUDIT LOG — every important write produces a row here
+// ═══════════════════════════════════════════════════════
+//
+// Append-only ledger of who changed what, when, and from where.
+// Required for compliance audits (SOC 2 / ISO 27001) and for
+// answering "who deleted this row?" type questions.
+//
+// `action`     — dot-namespaced verb, e.g. "leave.approve",
+//                "payroll.assign", "user.permissions.update"
+// `entityType` — model name the change applied to ("LeaveApplication")
+// `entityId`   — string-typed so it works for any id shape
+// `before`/`after` — JSON snapshots; helper redacts PII columns.
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  actorId    Int?
+  actorEmail String?
+  action     String
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  ip         String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Employee exits / offboarding
+// ═══════════════════════════════════════════════════════
+
+/// One row per employee who has left (or is leaving) the company.
+/// Linked 1:1 with the User row — flipping User.isActive to false is
+/// the canonical "they're gone" signal; this row stores the *why* /
+/// *when* / clearance state.
+model EmployeeExit {
+  id     Int  @id @default(autoincrement())
+  userId Int  @unique
+  user   User @relation("ExitUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// resignation | termination | contract_end | retirement | other
+  exitType         String   @default("resignation")
+  resignationDate  DateTime @db.Date
+  lastWorkingDay   DateTime @db.Date
+  noticePeriodDays Int      @default(30)
+
+  reason String? @db.Text
+  notes  String? @db.Text
+
+  /// 3-state offboarding pipeline:
+  ///   under_review → HR has filed the exit, waiting on review / approval
+  ///   in_progress  → exit accepted, clearance underway (legacy
+  ///                  notice_period + cleared were merged into this)
+  ///   exited       → last working day has passed and the user is off
+  ///                  the books (legacy offboarded)
+  status String @default("under_review")
+
+  // Clearance checklist — ticked off as HR processes the exit.
+  assetsReturned      Boolean @default(false)
+  documentsHandled    Boolean @default(false)
+  finalSettlementDone Boolean @default(false)
+  exitInterviewDone   Boolean @default(false)
+
+  // Whether the company would re-hire this person. Used by HR to filter
+  // past employees who could re-join (e.g. via the onboard wizard).
+  okToRehire Boolean @default(false)
+
+  initiatedById Int?
+  initiatedBy   User? @relation("ExitInitiator", fields: [initiatedById], references: [id], onDelete: SetNull)
+
+  // Stamped when the exit-survey reminder email goes out (~2 days before
+  // lastWorkingDay) so the daily cron sends it exactly once.
+  surveyReminderSentAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Notes posted on this exit (HR comments + activity-log entries).
+  // Cascades on delete so removing an exit doesn't orphan the notes.
+  notesLog   ExitNote[]
+  // Per-exit Finalise Payables wizard state — 1:1.
+  settlement ExitSettlement?
+  // Per-exit clearance tasks (assets / finance / IT etc.) — 1:N.
+  tasks      ExitTask[]
+  // Single exit-interview survey — 1:1.
+  survey     ExitSurvey?
+
+  @@index([status])
+  @@index([lastWorkingDay])
+}
+
+/// One note / activity-log entry on an EmployeeExit. Mirrors the
+/// "Add note" surface in Keka's offboarding drawer — HR drops a
+/// chronological log of what's been done / discussed.
+model ExitNote {
+  id        Int          @id @default(autoincrement())
+  exitId    Int
+  exit      EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
+  /// Whoever posted the note. Nullable so we can attribute system-
+  /// generated entries (e.g. "status changed by HR job") later.
+  authorId  Int?
+  author    User?        @relation("ExitNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  body      String       @db.Text
+  createdAt DateTime     @default(now())
+
+  @@index([exitId])
+  @@index([createdAt])
+}
+
+/// One settlement / "Review & Finalise Payables" record per exit.
+/// Encapsulates the Keka-style 2-step wizard: Step 1 collects line
+/// items across 5 sub-panels (Leave / Attendance / Salary /
+/// Reimbursements / Others), Step 2 computes summaries and locks the
+/// settlement when HR clicks Finalise.
+model ExitSettlement {
+  id     Int          @id @default(autoincrement())
+  exitId Int          @unique
+  exit   EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
+
+  /// "pay" | "hold" | "recover" — what HR wants done with the
+  /// settlement amount once finalised.
+  paymentMode    String @default("pay")
+  /// "at_once" | "multi_month" — whether the amount goes out in
+  /// the next payroll or is split across N months.
+  settlementMode String @default("at_once")
+
+  /// When the F&F was actually disbursed. Set on Finalise.
+  settlementDate  DateTime? @db.Date
+  settlementNotes String?   @db.Text
+
+  /// Notice-period rollup — surfaced in the Others panel UI and on
+  /// the F&F summary. Computed at create-time from the parent exit
+  /// but editable so HR can override.
+  actualNoticeDays  Int      @default(0)
+  noticeServingDays Int      @default(0)
+  buyoutEligible    Boolean  @default(false)
+  buyoutAmount      Decimal? @db.Decimal(12, 2)
+
+  /// Gratuity (5y rule). Eligibility computed at create-time from
+  /// joiningDate + lastWorkingDay; amount left for HR to fill in.
+  gratuityEligible Boolean  @default(false)
+  gratuityAmount   Decimal? @db.Decimal(12, 2)
+
+  /// Step 2: locked flag. Once true the wizard is read-only.
+  finalised     Boolean   @default(false)
+  finalisedAt   DateTime?
+  finalisedById Int?
+  finalisedBy   User?     @relation("SettlementFinaliser", fields: [finalisedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines ExitSettlementLine[]
+
+  @@index([exitId])
+  @@index([finalised])
+}
+
+/// One line item in the settlement. Section + subsection drive which
+/// Step-1 panel renders this row; amount + payAction feed the Step-2
+/// summary. Keeping it generic (rather than a column per component
+/// type) lets us add new line types without a schema change.
+model ExitSettlementLine {
+  id           Int            @id @default(autoincrement())
+  settlementId Int
+  settlement   ExitSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  /// "leave" | "attendance" | "salary" | "reimbursements" | "others"
+  section    String
+  /// "lop_reversal" | "lop_override" | "encashment" | "overtime" |
+  /// "shift_allowance" | "salary_arrear" | "salary_revision" |
+  /// "bonus" | "component_claim" | "expense_claim" | "advance" |
+  /// "notice_buyout" | "gratuity" | "one_time_payment" |
+  /// "other_settlement" | "loan" | "contribution_override" |
+  /// "tax_override" | "one_time_deduction"
+  subsection String
+  /// Free-form line label rendered in the UI (e.g. "Floater Leave
+  /// encashment", "Notice period buyout", "Sick Leave reversal").
+  label      String
+
+  /// Positive = payable to employee, negative = recover from. The
+  /// Step-2 summary sums these up as the F&F totals.
+  amount    Decimal @db.Decimal(12, 2)
+  /// "pay" | "recover" | "carryover" — what to do with this line on
+  /// finalise. Independent of `amount` sign so HR can mark a positive
+  /// amount as "carryover to next month" for example.
+  payAction String  @default("pay")
+
+  /// Days field (used by leave encashment + LOP entries).
+  days    Decimal? @db.Decimal(6, 2)
+  comment String?  @db.Text
+
+  createdAt DateTime @default(now())
+
+  @@index([settlementId])
+  @@index([section])
+}
+
+/// Per-exit clearance task. Mirrors Keka's "Tasks" tab in the exit
+/// drawer — one row per actionable item (return laptop, settle loan,
+/// hand over docs, IT account removal, etc.).
+model ExitTask {
+  id     Int          @id @default(autoincrement())
+  exitId Int
+  exit   EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
+
+  /// "finance" | "tasks" (generic) | "it" | "admin" — buckets the
+  /// drawer can group by.
+  category    String  @default("tasks")
+  title       String
+  description String? @db.Text
+
+  assigneeId Int?
+  assignee   User? @relation("ExitTaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  /// "pending" | "in_progress" | "done"
+  status      String    @default("pending")
+  dueDate     DateTime? @db.Date
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([exitId])
+  @@index([status])
+}
+
+/// Single exit-interview survey per exit. Free-form text plus a few
+/// 1–5 rating questions. Submitted by the employee from a public
+/// link or filled in by HR on their behalf.
+model ExitSurvey {
+  id     Int          @id @default(autoincrement())
+  exitId Int          @unique
+  exit   EmployeeExit @relation(fields: [exitId], references: [id], onDelete: Cascade)
+
+  reasonForLeaving      String?  @db.Text
+  satisfactionRating    Int? // 1-5
+  managementRating      Int? // 1-5
+  workEnvironmentRating Int? // 1-5
+  growthRating          Int? // 1-5
+  wouldRecommend        Boolean?
+  additionalFeedback    String?  @db.Text
+
+  // Employee-filled detailed exit questionnaire (the long form shown to
+  // the departing employee ~2 days before their last day). Stored as a
+  // JSON blob keyed by question id so the HR offboard drawer's simple
+  // columns above stay untouched. Read/written via raw SQL to avoid the
+  // stale-client drift gotcha.
+  employeeResponses     Json?
+  employeeSubmittedAt   DateTime?
+  employeeSubmittedById Int?
+
+  submittedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════
+// HR MODULE — Hiring (job openings + public applications)
+// ═══════════════════════════════════════════════════════
+
+/// A role HR is currently or previously hiring for. Only `isOpen=true`
+/// titles appear in the public application form's job dropdown.
+model JobOpening {
+  id          Int      @id @default(autoincrement())
+  title       String   @unique
+  department  String?
+  location    String?
+  description String?  @db.Text
+  /// Legacy boolean — kept in sync with `status` for backwards
+  /// compatibility with code (notifications, legacy /api/jobs/openings,
+  /// pre-publish-workflow code) that reads isOpen directly. The new
+  /// publishing flow drives status; isOpen mirrors it (true iff
+  /// status = 'published').
+  isOpen      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  // @default(now()) mirrors the DB default — the hiring create handler
+  // writes JobOpening via raw SQL (bypassing Prisma's @updatedAt), so the
+  // column needs a DB-level default or that INSERT hits a NOT NULL error.
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  // ── Keka-parity additions ────────────────────────────────────────
+  /// nb_media | yt_labs — which brand this opening belongs to. Drives
+  /// scoping in the new Hiring console + downstream candidate views.
+  brand           String?   @default("nb_media")
+  /// Free text — "Full-time" / "Intern" / "Contract" / "Part-time".
+  employmentType  String?
+  /// e.g. "5+ years" / "Senior" — surfaced in candidate cards.
+  experienceLevel String?
+  /// Annual CTC range as free-text ("₹8–12 LPA") so HR can phrase it
+  /// the way they want — no numeric box that fights regional formats.
+  salaryRange     String?
+  /// Internal-only — extra notes for the hiring team that don't show
+  /// on the public job description.
+  internalNotes   String?   @db.Text
+  /// Optional close date — auto-hides from /careers after this.
+  closesAt        DateTime?
+
+  // ── Publish workflow ─────────────────────────────────────────────
+  /// "draft" | "published" | "on_hold" | "closed". DRAFT = HR is still
+  /// preparing the requisition, not on careers page. PUBLISHED = live
+  /// on the public careers page, accepting applications. ON_HOLD =
+  /// temporarily paused but not closed (no new candidates, kanban
+  /// stays). CLOSED = role filled / cancelled.
+  status      String    @default("draft")
+  /// Stable URL slug auto-generated on first publish. Used by the
+  /// public `/jobs/[slug]` page so the URL doesn't leak the numeric id
+  /// and stays human-friendly when shared.
+  publicSlug  String?   @unique
+  /// First-publish timestamp. Stays set even if HR later moves the job
+  /// to ON_HOLD / CLOSED so the "Live since" stat on the careers page
+  /// stays correct.
+  publishedAt DateTime?
+  /// How many people HR plans to hire. Surfaced on the careers page
+  /// ("3 positions open") and used to auto-suggest closing once the
+  /// vacancy count is filled.
+  vacancies   Int       @default(1)
+  /// Star-flagged "priority" requisition. Surfaces a filter toggle in
+  /// the Jobs grid so HR can focus on the ones blocking their week.
+  /// Shared across every HR user — not per-user — so the team is
+  /// aligned on what's hot.
+  isPriority  Boolean   @default(false)
+
+  /// Optional Job Description attachment. HR uploads a PDF / DOC and
+  /// candidates see a "Download JD" link on the apply form.
+  jdFileUrl  String?
+  jdFileName String?
+  /// Extracted/edited plain-text version of the JD. Populated when
+  /// HR uses the inline preview-and-edit UI in the wizard: the file
+  /// is parsed (mammoth/pdf-parse), HR tweaks the text, and the
+  /// edited copy lands here. Independent of jdFileUrl so the
+  /// original file remains downloadable too.
+  jdText     String? @db.Text
+
+  // ── Compensation + hiring-config (restored 2026-06-15) ──
+  // Dropped from the DB by a past `prisma db push`; re-added to match the
+  // live schema. The create handler (POST /api/hr/hiring/jobs) writes all
+  // of these, so their absence broke every draft/publish. Defaults mirror
+  // that handler.
+  currency                      String   @default("INR")
+  salaryMin                     Int?
+  salaryMax                     Int?
+  salaryUnit                    String   @default("lpa")
+  allowReapplyDays              Int      @default(0)
+  archiveAfterFilled            Boolean  @default(false)
+  inboundOwnerStrategy          String   @default("none")
+  inboundOwnerUserId            Int?
+  interviewFeedbackVisibility   String   @default("open")
+  recruitersAccessOwnOnly       Boolean  @default(false)
+  interviewersAccessOwnOnly     Boolean  @default(false)
+  notifyRecruiterOnNewCandidate Boolean  @default(true)
+  notifyHiringMgrOnNewCandidate Boolean  @default(true)
+  publishChannels               String[] @default(["career_site"])
+
+  // Hiring team — who is responsible for this requisition.
+  recruiterId     Int?
+  hiringManagerId Int?
+  recruiter       User?                     @relation("JobOpeningRecruiter", fields: [recruiterId], references: [id], onDelete: SetNull)
+  hiringManager   User?                     @relation("JobOpeningHiringManager", fields: [hiringManagerId], references: [id], onDelete: SetNull)
+  interviewers    JobOpeningInterviewer[]
+  // Restored 2026-06-12 — recruiter-pool back-relation for JobOpeningRecruiterJoin.
+  recruiterPool   JobOpeningRecruiterJoin[] @relation("JobOpeningRecruiterJoinJob")
+  // Restored 2026-06-12 — hiring-manager-pool back-relation for JobOpeningHiringManagerJoin.
+  hiringManagerPool JobOpeningHiringManagerJoin[] @relation("JobOpeningHiringManagerJoinJob")
+  // Restored 2026-06-12 — per-job screening questions back-relation.
+  questions       JobOpeningQuestion[]
+  locations       JobOpeningLocation[]
+  /// Legacy multi-location table. Restored from production on
+  /// 2026-06-12 after an incident. Predates / runs alongside
+  /// `JobOpeningLocation` and is read by the public referral jobs API
+  /// (see src/app/api/hr/jobs/referrals/route.ts) to aggregate location
+  /// names via string_agg for the referral jobs list.
+  legacyLocations JobLocation[]
+
+  applications JobApplication[]
+
+  /// Per-job application form field overrides (restored 2026-06-12).
+  fieldConfigs JobOpeningFieldConfig[]
+
+  @@index([isOpen])
+  @@index([brand])
+  @@index([recruiterId])
+  @@index([hiringManagerId])
+  @@index([status])
+  @@index([publishedAt])
+}
+
+/// Many-to-many between JobOpening and User (interviewers panel).
+/// Separate from recruiter / hiringManager because most jobs have 2-5
+/// interviewers and we want a sane join table rather than a JSON
+/// array column.
+model JobOpeningInterviewer {
+  id           Int        @id @default(autoincrement())
+  jobOpeningId Int
+  userId       Int
+  jobOpening   JobOpening @relation(fields: [jobOpeningId], references: [id], onDelete: Cascade)
+  user         User       @relation("JobOpeningInterviewer", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@unique([jobOpeningId, userId])
+  @@index([jobOpeningId])
+  @@index([userId])
+}
+
+/// Canonical hiring stages. Seeded once with the standard Keka-style
+/// pipeline and shared across every JobOpening. HR can re-order via
+/// the Settings tab. Two terminal stages (Hired, Rejected) live at the
+/// end and aren't draggable mid-flow.
+model HiringStage {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique // "sourced" | "screening" | "phone_screen" | ...
+  label     String // Human-friendly label shown in the kanban column header
+  /// Display order in the kanban — lower numbers render leftmost.
+  /// Reserved positions: terminal stages (hired / rejected) live at
+  /// the end (>= 100) so they always sort last regardless of edits.
+  sortOrder Int      @default(0)
+  /// "active" | "hired" | "rejected" — terminal kinds short-circuit
+  /// the funnel so the kanban can colour-code and lock them.
+  kind      String   @default("active")
+  /// Tailwind colour class used for the column accent strip.
+  color     String   @default("slate")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  candidates        JobApplicationStage[]
+  currentApplicants JobApplication[]
+  emailTemplates    EmailTemplate[]       @relation("EmailTemplateStage")
+
+  // Restored 2026-06-12 — legacy per-candidate stage history.
+  candidateStageMoves CandidateStage[]    @relation("CandidateStageStage")
+
+  @@index([sortOrder])
+  @@index([isActive])
+}
+
+/// One row per submission from the public job-application form.
+model JobApplication {
+  id           Int        @id @default(autoincrement())
+  jobOpeningId Int
+  jobOpening   JobOpening @relation(fields: [jobOpeningId], references: [id], onDelete: Restrict)
+
+  fullName        String
+  email           String
+  phone           String?
+  coverLetter     String? @db.Text
+  linkedinUrl     String?
+  portfolioUrl    String?
+  experienceYears Int?
+  currentCompany  String?
+  noticePeriod    String?
+
+  resumeFileName String?
+  /// Public URL the resume is served from. For NEW applications this
+  /// points at /api/hr/hiring/resumes/<id> (which streams resumeBlob).
+  /// LEGACY rows may still point at /uploads/resumes/<uuid>.pdf on the
+  /// filesystem — those files are fragile (deployments wipe them).
+  resumeUrl      String?
+  /// Resume bytes stored in-DB so deployments / dev-prod drift can't
+  /// lose the file. nullable on legacy rows that haven't been
+  /// backfilled. 5 MB cap enforced at upload time in the apply route.
+  resumeBlob     Bytes?
+  /// MIME type of the resume blob (application/pdf, etc.). Used by the
+  /// /api/hr/hiring/resumes/<id> endpoint to set Content-Type safely.
+  resumeMime     String? @db.VarChar(120)
+
+  /// LEGACY workflow state: new | reviewed | shortlisted | interviewing | rejected | hired
+  /// Kept for backwards-compat with the previous flat-list UI. The
+  /// canonical pipeline state lives on `currentStageId` (HiringStage)
+  /// once the kanban migration runs. New code should read currentStage.
+  status  String  @default("new")
+  hrNotes String? @db.Text
+
+  /// Recruiter who "owns" this candidate (the assign-owner action).
+  /// Restored 2026-06-15 — written via raw SQL but dropped from the DB by
+  /// a past `prisma db push`; re-added additively to match the live DB.
+  recruiterOwnerId Int?
+  /// Free-form candidate tags (add/remove-tag action) — TEXT[] in PG.
+  tags             String[] @default([])
+
+  // ── Keka-parity additions ────────────────────────────────────────
+  /// Current stage in the kanban pipeline (FK to HiringStage). Null
+  /// for legacy rows until the migration backfills them.
+  currentStageId Int?
+  currentStage   HiringStage? @relation(fields: [currentStageId], references: [id], onDelete: SetNull)
+  /// When the candidate first arrived in their current stage — drives
+  /// the "time-in-stage" badge on the kanban card.
+  enteredStageAt DateTime?
+  /// Recruiter / hiring-manager rating, 1-5. Surfaces as stars on
+  /// the kanban card. Separate from interview scorecards (next phase).
+  overallRating  Int?
+  /// Source — "Career Page" / "LinkedIn" / "Referral" / "Naukri" etc.
+  /// Free-text so HR isn't boxed into a fixed list.
+  source         String?
+  /// Referred-by — when source = Referral, links to the referring
+  /// employee so HR can run referral reports.
+  referredById   Int?
+  referredBy     User?        @relation("JobApplicationReferrer", fields: [referredById], references: [id], onDelete: SetNull)
+
+  /// Archive metadata — set by the ArchiveCandidateModal flow. archivedAt
+  /// drives the "Archived" badge in the list view; archiveReason +
+  /// archiveNote capture HR's "why" so the candidate can be re-opened
+  /// later with full context. All three were never in the schema but
+  /// were already in production — re-added after a prisma db push
+  /// silently dropped them on 2026-06-12.
+  archivedAt    DateTime?
+  archiveReason String?
+  archiveNote   String?   @db.Text
+
+  /// Smart-form columns written by the public /api/jobs/apply route
+  /// (and read by the CandidateDrawer Profile tab). Added to the schema
+  /// after the same 2026-06-12 prisma db push dropped them — production
+  /// code reads/writes via $queryRawUnsafe, the schema was the source of
+  /// truth that lagged behind.
+  firstName              String?
+  middleName             String?
+  lastName               String?
+  gender                 String?
+  dateOfBirth            DateTime?
+  mobileCountryCode      String?
+  experienceMonths       Int?
+  currentSalary          Float?
+  currentSalaryCurrency  String?
+  currentSalaryFreq      String?
+  expectedSalary         Float?
+  expectedSalaryCurrency String?
+  expectedSalaryFreq     String?
+  availableToJoinDays    Int?
+  preferredLocation      String?
+  currentLocation        String?
+  /// Comma-separated free-text list from the chip input on the apply form.
+  skills                 String?   @db.Text
+  /// JSON-stringified array of repeatable Education Details cards.
+  educationDetails       String?   @db.Text
+  /// JSON-stringified array of repeatable Experience Details cards.
+  experienceDetails      String?   @db.Text
+
+  // Cascade collections
+  stageHistory JobApplicationStage[]
+  interviews   Interview[]
+  activity     CandidateActivity[]
+  offers       OfferLetter[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([jobOpeningId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([currentStageId])
+  @@index([referredById])
+}
+
+/// Audit log of stage transitions — one row per move. Powers the
+/// candidate detail drawer's "Stages" timeline.
+model JobApplicationStage {
+  id            Int            @id @default(autoincrement())
+  applicationId Int
+  stageId       Int
+  application   JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  stage         HiringStage    @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  enteredAt     DateTime       @default(now())
+  /// Null while the candidate is still in this stage; set when they
+  /// move out so we can compute time-in-stage for reports.
+  exitedAt      DateTime?
+  /// Who moved them. Null for system-driven transitions (e.g. the
+  /// auto-screen rule that bumps "new" → "Sourced" on apply).
+  movedById     Int?
+  movedBy       User?          @relation("StageMover", fields: [movedById], references: [id], onDelete: SetNull)
+  note          String?        @db.Text
+
+  @@index([applicationId])
+  @@index([stageId])
+  @@index([enteredAt])
+}
+
+/// One row per interview round (Round 1 / Round 2 / Final). Multiple
+/// interviewers per round via the join table.
+model Interview {
+  id            Int            @id @default(autoincrement())
+  applicationId Int
+  application   JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  /// Round number within this application — 1, 2, 3 etc.
+  roundNumber     Int       @default(1)
+  /// Round title — "Phone Screen" / "Technical" / "Culture-fit" /
+  /// "Final with CEO". Free text so HR can label as they like.
+  title           String
+  scheduledAt     DateTime?
+  durationMinutes Int       @default(45)
+  /// Location string — Zoom link, "On-site (Mohali Office)", etc.
+  location        String?
+  /// "scheduled" | "completed" | "cancelled" | "no_show"
+  status          String    @default("scheduled")
+  /// Aggregate decision after the round — "pass" | "fail" | "hold" | null
+  outcome         String?
+  /// Free-text notes from the interview panel — pre-filled by the
+  /// first interviewer who saves, editable by anyone on the panel.
+  notes           String?   @db.Text
+  /// Google Calendar event id — set when a Meet link is auto-created.
+  /// Needed so reschedule/cancel can patch/delete the calendar event
+  /// instead of orphaning it. NULL for off-Google interviews
+  /// (face-to-face / HR-pasted Zoom URL / pre-Meet-integration rows).
+  googleEventId   String?
+
+  panelists  InterviewPanelist[]
+  scorecards InterviewScorecard[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([applicationId])
+  @@index([scheduledAt])
+}
+
+/// Join: which interviewers are on which interview's panel.
+model InterviewPanelist {
+  id          Int       @id @default(autoincrement())
+  interviewId Int
+  userId      Int
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  user        User      @relation("InterviewPanelist", fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([interviewId, userId])
+}
+
+/// Per-interviewer scorecard for an interview. Each panelist fills
+/// their own — aggregate goes into Interview.outcome via app logic.
+model InterviewScorecard {
+  id            Int       @id @default(autoincrement())
+  interviewId   Int
+  interviewerId Int
+  interview     Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  interviewer   User      @relation("InterviewerScorecard", fields: [interviewerId], references: [id], onDelete: Cascade)
+
+  /// 1-5 ratings on the standard competencies. Null = not rated.
+  technicalScore      Int?
+  communicationScore  Int?
+  cultureScore        Int?
+  problemSolvingScore Int?
+
+  /// Free-text feedback — visible to other panelists + HR.
+  strengths      String? @db.Text
+  weaknesses     String? @db.Text
+  recommendation String? // "strong_yes" | "yes" | "no" | "strong_no"
+  notes          String? @db.Text
+
+  submittedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([interviewId, interviewerId])
+}
+
+/// Reusable email templates that auto-send when a candidate hits a
+/// stage. Supports merge tags ({{candidate_name}}, {{job_title}},
+/// {{company}}, {{interviewer_name}}, {{interview_date}} etc.) — the
+/// app substitutes these at send time.
+model EmailTemplate {
+  id            Int          @id @default(autoincrement())
+  /// Stable key for code references — "app_received" / "shortlisted"
+  /// / "interview_scheduled" / "offer_extended" / "rejection_generic".
+  key           String       @unique
+  /// HR-friendly name shown in the Settings tab.
+  name          String
+  /// "stage_change" | "manual" | "interview_scheduled" | "offer" |
+  /// "rejection" — drives which events can trigger this template.
+  trigger       String       @default("manual")
+  /// Stage that triggers the email (nullable — only set when
+  /// trigger="stage_change"). Auto-send when an application enters
+  /// this stage.
+  stageId       Int?
+  stage         HiringStage? @relation("EmailTemplateStage", fields: [stageId], references: [id], onDelete: SetNull)
+  subject       String
+  /// HTML body with merge tags. Rendered server-side at send time.
+  bodyHtml      String       @db.Text
+  /// Whether the template is active — toggle off without deleting.
+  isActive      Boolean      @default(true)
+  /// When trigger="stage_change", whether to auto-send or just stage
+  /// the email for HR to review + click Send.
+  autoSend      Boolean      @default(false)
+  /// Optional role match — when set, this template is the default for
+  /// candidates whose JobOpening.title contains this substring (case-
+  /// insensitive). e.g. "Script Writer" / "Video Editor" / "Graphic
+  /// Designer". Used by the role-specific work-sample templates.
+  jobTitleMatch String?
+  /// JSON bag of free-form merge values stored alongside the template
+  /// — assignment links, reference URLs, drive folders, etc. Keys
+  /// surface as merge tags: {{assignment_link}}, {{drive_folder}},
+  /// {{reference_1}}, etc. HR can edit per-template without code.
+  links         Json?        @db.JsonB
+  /// Default deadline in hours for time-sensitive templates (work
+  /// samples, offer responses). Resolver computes
+  /// {{submission_deadline}} as now + deadlineHours. HR can override
+  /// at send-time.
+  deadlineHours Int?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([trigger])
+  @@index([stageId])
+  @@index([jobTitleMatch])
+}
+
+/// Offer letter — generated from a template or uploaded as a PDF.
+/// Tracked separately so HR can revoke / re-send without touching the
+/// application row.
+model OfferLetter {
+  id            Int            @id @default(autoincrement())
+  applicationId Int
+  application   JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  /// "draft" | "sent" | "accepted" | "declined" | "revoked" | "expired"
+  status             String    @default("draft")
+  ctcAnnual          Decimal?  @db.Decimal(12, 2)
+  joiningDate        DateTime?
+  expiresAt          DateTime?
+  /// When trigger=template-generated, the rendered HTML body. When
+  /// uploaded as a PDF, this is empty and `attachmentBlob` carries the
+  /// file.
+  bodyHtml           String?   @db.Text
+  attachmentFileName String?
+  attachmentMime     String?
+  attachmentBlob     Bytes?
+  /// Recipient's e-signature timestamp when they accept the offer.
+  acceptedAt         DateTime?
+  declinedAt         DateTime?
+  revokedAt          DateTime?
+  /// Who generated / sent this offer.
+  createdById        Int?
+  createdBy          User?     @relation("OfferCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([applicationId])
+  @@index([status])
+}
+
+/// Activity feed for a candidate — every meaningful event (stage
+/// move, interview scheduled, email sent, note added, offer extended).
+/// Powers the candidate detail drawer's Activity tab.
+model CandidateActivity {
+  id            Int            @id @default(autoincrement())
+  applicationId Int
+  application   JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  /// "stage_change" | "note" | "email_sent" | "interview_scheduled"
+  /// | "interview_completed" | "offer_sent" | "offer_accepted"
+  /// | "offer_declined" | "resume_uploaded" | "tag_added" | "rejected"
+  kind    String
+  /// Short human-friendly summary line shown in the timeline.
+  summary String
+  /// Optional JSON payload — interview id, email subject, prev/next
+  /// stage ids, etc. Read by the drawer for richer rendering.
+  meta    Json?  @db.JsonB
+
+  actorId   Int?
+  actor     User?    @relation("CandidateActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@index([applicationId])
+  @@index([kind])
+  @@index([createdAt])
+}
+
+/// HR letter templates — FnF settlement, internship completion,
+/// probation confirmation, revised offer letter, etc. Body is
+/// stored as HTML (HR can edit in the Templates page); placeholders
+/// in `{{Section.Field}}` form are substituted at render time from
+/// the picked employee + manually-entered custom fields.
+///
+/// `customFields` is a JSON array of `{ key, label, type }` entries
+/// describing the per-template manual inputs (e.g. FnFAmount,
+/// ReferenceNo, InternshipMonths) HR fills in when generating.
+model LetterTemplate {
+  id           Int      @id @default(autoincrement())
+  // NOT @unique anymore — the same `key` can have one row per brand.
+  // See @@unique([key, businessUnit]) below.
+  key          String
+  title        String // display name in the Templates page
+  category     String   @default("general") // "offboarding" | "onboarding" | "appraisal" | …
+  /// "NB Media" | "YT Labs" | null (universal fallback). Picker
+  /// at generate time matches the employee's brand first, then
+  /// falls back to a NULL-tagged row.
+  businessUnit String?
+  bodyHtml     String   @db.Text // template body with {{Section.Field}} placeholders
+  customFields Json?    @db.JsonB // [{ key, label, type, required }]
+  isActive     Boolean  @default(true)
+  updatedById  Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([key, businessUnit])
+  @@index([category])
+  @@index([key, businessUnit])
+}
+
+/// Per-field visibility/required toggles for the public application form.
+/// Seeded once with the canonical field set; HR can flip visibility/required
+/// from the Hiring → Form Settings tab. Name / email / job opening / resume
+/// are conceptually mandatory; they're seeded with isRequired=true and
+/// isVisible=true and HR shouldn't disable them.
+model JobApplicationFormField {
+  id          Int      @id @default(autoincrement())
+  fieldKey    String   @unique // "phone" | "coverLetter" | "linkedinUrl" | …
+  label       String
+  fieldType   String // "text" | "tel" | "email" | "textarea" | "url" | "number"
+  isVisible   Boolean  @default(true)
+  isRequired  Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  isMandatory Boolean  @default(false) // System-locked — HR can't hide these (name/email/etc.)
+  updatedAt   DateTime @updatedAt
+}
+
+/// Pulse survey question — both weekly and monthly cycles. Each question
+/// is keyed by a brand (EmployeeProfile.businessUnit) so NB Media and YT
+/// Labs employees see different surveys. Was missing from schema for a
+/// long time even though production code wrote/read it via raw SQL.
+/// Restored on 2026-06-12 after a prisma db push silently dropped it.
+model PulseQuestion {
+  id         Int      @id @default(autoincrement())
+  /// 1-4 for weekly surveys (rotates by ISO week). NULL for monthly.
+  week       Int?
+  order      Int      @default(0)
+  text       String
+  /// "emoji" | "rating" | "likert" | "enps" | "text"
+  type       String
+  /// JSON-stringified emoji list (only used when type === "emoji").
+  emojis     Json?
+  isActive   Boolean  @default(true)
+  /// "weekly" | "monthly"
+  surveyType String   @default("weekly")
+  /// Brand filter — "NB Media" / "YT Labs". Strict brand separation.
+  brand      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  responses PulseResponse[]
+
+  @@index([surveyType, brand, isActive])
+}
+
+/// One row per user per question per submission cycle. cycleKey
+/// is stored as "weekKey" historically — for weekly cycles it holds
+/// the ISO week (e.g. "2026-W23"); for monthly cycles it holds the
+/// month key (e.g. "2026-M06"). The (userId, weekKey, questionId)
+/// unique constraint lets the server enforce idempotency on a
+/// re-submit. Restored from production on 2026-06-12 after the same
+/// prisma db push dropped it.
+model PulseResponse {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  weekKey     String
+  questionId  Int
+  score       Int?
+  comment     String?  @db.Text
+  submittedAt DateTime @default(now())
+
+  user     User          @relation("PulseResponseUser", fields: [userId], references: [id], onDelete: Cascade)
+  question PulseQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekKey, questionId])
+  @@index([userId, weekKey])
+}
+
+// ═══════════════════════════════════════════════════════
+// KPI documents per (brand, department)
+//
+// Restored from production on 2026-06-12 after a stray `prisma db push`
+// dropped this table. The admin UI uploads PDF/Word/Excel files for each
+// (brand, department) pair; re-uploading replaces the file in place via
+// the (brand, department) UNIQUE constraint + ON CONFLICT upsert. Files
+// live under /public/uploads/kpis/. Adding the model here so that future
+// `prisma db push` / `migrate` runs cannot silently remove it again.
+// See: src/app/api/kpis/documents/route.ts
+// ═══════════════════════════════════════════════════════
+model KpiDocument {
+  id         Int      @id @default(autoincrement())
+  /// "NB Media" | "YT Labs". Defaults to "NB Media" to match legacy
+  /// rows created before the brand split.
+  brand      String   @default("NB Media")
+  /// HR-managed department label, e.g. "HR Operations & TA".
+  department String
+  /// Original filename as uploaded (preserved for display/download).
+  fileName   String
+  /// Public URL under /uploads/kpis/<uuid>-<safe-name>.<ext>
+  fileUrl    String
+  uploadedAt DateTime @default(now()) @db.Timestamp(3)
+  /// User who performed the upload. Nullable because we keep the doc
+  /// even if the uploader is later removed (FK is ON DELETE SET NULL).
+  uploadedBy Int?
+
+  uploader User? @relation("KpiDocumentUploader", fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@unique([brand, department])
+  @@index([brand, department])
+}
+
+/// Monthly WFH (Work From Home) balance per employee. One row per
+/// (user, monthKey). `credited` is seeded by the auto-credit cron from
+/// the WfhPolicy per-brand quota at the start of each month (and is
+/// HR-overridable); `used` is a legacy counter — the source of truth
+/// for usage is now computed live + half-day weighted from approved
+/// WFHRequest rows. monthKey format: "2026-M06". `updatedById` tracks
+/// the HR user who last edited a manual override.
+///
+/// Restored from production on 2026-06-12 after a `prisma db push`
+/// dropped the table. Keep this model in schema so future db pushes
+/// do not drop it again.
+model WfhBalance {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  monthKey    String
+  credited    Int
+  used        Int      @default(0)
+  updatedById Int?
+  createdAt   DateTime @default(now()) @db.Timestamp(3)
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamp(3)
+
+  user      User  @relation("WfhBalanceUser", fields: [userId], references: [id], onDelete: Cascade)
+  updatedBy User? @relation("WfhBalanceUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, monthKey])
+  @@index([userId])
+  @@index([monthKey])
+}
+
+/// Singleton (id = 1) global WFH policy row. Controls whether the
+/// per-brand monthly WFH limit is enforced and the per-brand quotas:
+/// `nbMediaQuota` (default 2 days/month) and `ytLabsQuota` (default 3
+/// days/month). HR Admin edits these from the admin Leave Policies
+/// panel; the auto-credit cron reads them on the 1st of every month to
+/// seed each WfhBalance row, and the WFH-request POST guard reads them
+/// when `limitEnabled` is true. The CHECK (id = 1) constraint enforces
+/// the singleton invariant at the DB level.
+///
+/// Restored from production on 2026-06-12 after a `prisma db push`
+/// dropped the table. Keep this model in schema so future db pushes
+/// do not drop it again.
+model WfhPolicy {
+  id           Int      @id
+  limitEnabled Boolean  @default(true)
+  nbMediaQuota Int      @default(2)
+  ytLabsQuota  Int      @default(3)
+  updatedById  Int?
+  updatedAt    DateTime @default(now()) @db.Timestamp(3)
+
+  updatedBy User? @relation("WfhPolicyUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+/// Per-job multi-location hiring setup. One row per (job, location)
+/// allowing HR to specify different hire timelines and position
+/// counts per city/region for a single requisition (e.g., Mohali,
+/// Remote, Bangalore with different target hire dates and open
+/// positions). Used by the create-job wizard insert path
+/// (src/app/api/hr/hiring/jobs/route.ts) and the referral jobs list
+/// (src/app/api/hr/jobs/referrals/route.ts), which falls back
+/// gracefully when the table is missing.
+///
+/// Restored on 2026-06-12 after a `prisma db push` dropped the
+/// table — the original CREATE TABLE lived in migration
+/// 20260529180000_job_wizard_v1 but the model was never written
+/// back into schema.prisma, so the next push pruned it. Keeping the
+/// model definition here ensures future db push runs leave the
+/// table alone.
+model JobOpeningLocation {
+  id             Int       @id @default(autoincrement())
+  jobOpeningId   Int
+  name           String
+  startHireDate  DateTime? @db.Date
+  targetHireDate DateTime? @db.Date
+  positions      Int       @default(1)
+  sortOrder      Int       @default(0)
+  createdAt      DateTime  @default(now()) @db.Timestamp(3)
+
+  jobOpening JobOpening @relation(fields: [jobOpeningId], references: [id], onDelete: Cascade)
+
+  @@index([jobOpeningId])
+}
+
+/// Per-cycle salary processing or payout holds on an employee.
+/// `kind='processing'` skips payslip generation entirely for that
+/// (user, month, year). `kind='payout'` generates a payslip but
+/// flags status=on_hold so net pay isn't released. One row per
+/// (userId, month, year) — the upsert at
+/// src/app/api/hr/payroll/salary-hold/route.ts flips kind in place.
+/// Used by Run Payroll Step 5 sub-steps 1 & 2 and by the generator
+/// at src/app/api/hr/payroll/generate/route.ts.
+///
+/// Restored from production on 2026-06-12 after a `prisma db push`
+/// dropped the table. Keep this model in schema so future db pushes
+/// do not drop it again.
+model SalaryHold {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  month     Int
+  year      Int
+  kind      String
+  payAction String?
+  comment   String?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  createdBy Int?
+
+  user    User  @relation("SalaryHoldUser", fields: [userId], references: [id], onDelete: Cascade)
+  creator User? @relation("SalaryHoldCreator", fields: [createdBy], references: [id])
+
+  @@unique([userId, month, year])
+  @@index([month, year, kind])
+  @@index([userId])
+}
+
+/// Per-employee per-cycle override of statutory tax/contribution
+/// amounts used by the payroll engine. `kind` is one of
+/// 'PT' (Professional Tax, single amount), 'ESI' (Employee State
+/// Insurance, employee+employer), 'TDS' (Tax Deducted at Source,
+/// single), 'LWF' (Labour Welfare Fund, employee+employer). One row
+/// per (userId, month, year, kind). The payroll engine replaces
+/// computed values with the override during Run Payroll Step 6
+/// (PT, ESI, TDS, LWF sub-steps).
+///
+/// Restored on 2026-06-12 after a `prisma db push` dropped the
+/// table. Keeping the model definition here ensures future db push
+/// runs leave the table alone.
+model TaxOverride {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  month            Int
+  year             Int
+  kind             String
+  employeeOverride Decimal? @db.Decimal(12, 2)
+  employerOverride Decimal? @db.Decimal(12, 2)
+  comment          String?  @db.Text
+  createdAt        DateTime @default(now()) @db.Timestamptz(6)
+  createdBy        Int?
+
+  user          User  @relation("TaxOverrideUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdByUser User? @relation("TaxOverrideCreator", fields: [createdBy], references: [id])
+
+  @@unique([userId, month, year, kind])
+  @@index([month, year, kind])
+  @@index([userId])
+}
+
+/// Junction table mapping multiple recruiters to a job opening.
+/// JobOpening.recruiterId stores the "primary" recruiter; this table
+/// holds the full recruiter pool. Used in the Create Job wizard
+/// (Step 3) to assign multiple recruiters to source candidates for
+/// a single role. INSERTs use ON CONFLICT DO NOTHING for idempotency.
+///
+/// RESTORED 2026-06-12 after the table was accidentally dropped in
+/// the production incident. The model is declared explicitly here so
+/// a future `prisma db push` cannot silently drop it again. Original
+/// shape mirrors prisma/migrations/20260529180000_job_wizard_v1.
+model JobOpeningRecruiterJoin {
+  jobOpeningId Int
+  userId       Int
+  createdAt    DateTime @default(now()) @db.Timestamp(3)
+
+  jobOpening JobOpening @relation("JobOpeningRecruiterJoinJob", fields: [jobOpeningId], references: [id], onDelete: Cascade)
+  user       User       @relation("JobOpeningRecruiterJoinUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([jobOpeningId, userId])
+  @@index([userId])
+}
+
+/// Per-job screening questions for the hiring application form. Stores
+/// custom questions (short_text | long_text | yes_no | multiple_choice |
+/// file | number | date) with optional `options` payload (JSON array of
+/// strings for multiple_choice) and a `sortOrder` for HR-controlled
+/// display ordering. Used by the Create Job wizard Step 4 to configure
+/// what candidates must answer per opening.
+///
+/// RESTORED 2026-06-12 after the table was accidentally dropped in the
+/// production incident. The model is declared explicitly here so a
+/// future `prisma db push` cannot silently drop it again. Original
+/// shape mirrors prisma/migrations/20260529150000_job_opening_form_setup.
+model JobOpeningQuestion {
+  id           Int      @id @default(autoincrement())
+  jobOpeningId Int
+  text         String
+  type         String   @default("short_text")
+  options      Json?
+  required     Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamp(3)
+  updatedAt    DateTime @default(now()) @db.Timestamp(3)
+
+  jobOpening JobOpening @relation(fields: [jobOpeningId], references: [id], onDelete: Cascade)
+
+  @@index([jobOpeningId], map: "JobOpeningQuestion_jobOpeningId_idx")
+  @@index([jobOpeningId, sortOrder], map: "JobOpeningQuestion_sort_idx")
+}
+
+/// Legacy per-job multi-location table. Predates / runs alongside
+/// `JobOpeningLocation` (the newer richer model with start/target hire
+/// dates and positions). Read by the public referral jobs API at
+/// src/app/api/hr/jobs/referrals/route.ts via a LEFT JOIN +
+/// `string_agg(l.name, ', ')` to render comma-joined locations on the
+/// referral jobs list. The route catches Postgres error 42P01
+/// ("relation does not exist") and re-runs without the join, which is
+/// how this absence went undetected.
+///
+/// Restored from production on 2026-06-12 after a `prisma db push`
+/// dropped the table. Re-declared here as a first-class Prisma model
+/// so a future `db push` cannot silently drop it again. Original
+/// shape: id SERIAL PK, jobOpeningId FK to JobOpening (CASCADE),
+/// name TEXT, createdAt TIMESTAMP(3) DEFAULT NOW(), idx on jobOpeningId.
+model JobLocation {
+  id           Int      @id @default(autoincrement())
+  jobOpeningId Int
+  name         String
+  createdAt    DateTime @default(now()) @db.Timestamp(3)
+
+  jobOpening JobOpening @relation(fields: [jobOpeningId], references: [id], onDelete: Cascade)
+
+  @@index([jobOpeningId])
+}
+
+/// Per-job application form field overrides.
+///
+/// Merges code defaults (STANDARD_FIELDS x CHANNELS) with per-job
+/// visibility/sort overrides. One row per (jobOpeningId, channel,
+/// fieldKey) where `channel` is the acquisition channel (career_site |
+/// recruiter_sourcing | internal_job_posting | referral) and
+/// `fieldKey` is the candidate field (first_name, email, ...).
+/// `visibility` is required | optional | hidden. Read/upsert in
+/// src/app/api/hr/hiring/jobs/[id]/fields/route.ts via raw SQL.
+///
+/// Restored on 2026-06-12 after a `prisma db push` dropped the table.
+/// Re-declared here as a first-class Prisma model so a future db push
+/// cannot silently drop it again. Original migration:
+/// 20260529150000_job_opening_form_setup.
+model JobOpeningFieldConfig {
+  id           Int      @id @default(autoincrement())
+  jobOpeningId Int
+  channel      String
+  fieldKey     String
+  visibility   String   @default("optional")
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamp(3)
+  updatedAt    DateTime @default(now()) @db.Timestamp(3)
+
+  jobOpening JobOpening @relation(fields: [jobOpeningId], references: [id], onDelete: Cascade)
+
+  @@unique([jobOpeningId, channel, fieldKey], map: "JobOpeningFieldConfig_unique_idx")
+  @@index([jobOpeningId], map: "JobOpeningFieldConfig_jobOpeningId_idx")
+}
+
+/// Generic key/value store for HR-managed dropdown options used by
+/// the CustomSelect component (department, jobTitle, etc.). Each row
+/// is one selectable value scoped to a `listKey` group. The HR options
+/// API (src/app/api/hr/options/route.ts) does an
+/// `INSERT ... ON CONFLICT (listKey, value) DO UPDATE` so re-adding
+/// the same value is idempotent — the UNIQUE (listKey, value)
+/// constraint is what makes that work.
+///
+/// Restored on 2026-06-12 after a `prisma db push` dropped the
+/// table. Keeping the model definition here ensures future db push
+/// runs leave the table alone.
+model OptionList {
+  id        Int      @id @default(autoincrement())
+  listKey   String
+  value     String
+  createdBy Int?
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+
+  createdByUser User? @relation("OptionListCreator", fields: [createdBy], references: [id])
+
+  @@unique([listKey, value])
+  @@index([listKey, value])
+}
+
+/// One-off payments or deductions for a payroll cycle (month + year).
+/// `kind` discriminates: 'payment' for adhoc allowances, 'deduction'
+/// for adhoc reductions. One table backs both — driven by the Run
+/// Payroll Step 4 sub-steps ("Adhoc Payments" / "Adhoc Deductions").
+/// Payroll generate reads per-user sums for the cycle to add/subtract
+/// from gross/net. Supports idempotent bulk-copy from a previous
+/// cycle (skips users who already have a row in the target cycle).
+///
+/// Restored on 2026-06-12 after a `prisma db push` dropped the
+/// table. Keeping the model definition here ensures future db push
+/// runs leave the table alone.
+model AdhocLineItem {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  month     Int
+  year      Int
+  /// 'payment' | 'deduction' — CHECK constraint enforced in DB.
+  kind      String
+  type      String?
+  amount    Decimal  @db.Decimal(12, 2)
+  comment   String?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  createdBy Int?
+
+  user          User  @relation("AdhocLineItemUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdByUser User? @relation("AdhocLineItemCreator", fields: [createdBy], references: [id])
+
+  @@index([month, year, kind], map: "AdhocLineItem_month_year_kind_idx")
+  @@index([userId], map: "AdhocLineItem_userId_idx")
+}
+
+/// One-time bonus / perk payouts per employee. Tracks a single
+/// payment amount, a free-text reason, the effective date (used by
+/// the payroll engine to decide which run-month a bonus belongs to),
+/// an optional bonusType classification, and a paymentStatus —
+/// 'due_future' means the bonus is planned and should be picked up by
+/// the next payroll generate pass, 'paid_past' means it has already
+/// been settled outside the system and the row is kept only as a
+/// ledger entry.
+///
+/// An optional supporting document (offer letter scan, performance
+/// memo, signed approval PDF, etc.) can be attached as a BYTEA blob
+/// — kept inline so the evidence survives independently of any
+/// external object store. attachmentName / attachmentMime carry the
+/// original filename and content-type for download.
+///
+/// Read by:
+///   • src/app/api/hr/payroll/bonus/route.ts            (CRUD + list)
+///   • src/app/api/hr/payroll/bonus/[id]/file/route.ts  (attachment download)
+///   • src/app/api/hr/payroll/generate/route.ts         (run-month pull)
+///   • src/app/api/hr/payroll/runs/[id]/exports/pay-register/route.ts
+///
+/// Restored on 2026-06-12 after a `prisma db push` dropped the
+/// table. Keeping the model definition here ensures future db push
+/// runs leave the table alone.
+model EmployeeBonus {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  amount         Decimal  @db.Decimal(12, 2)
+  reason         String?  @db.Text
+  effectiveDate  DateTime @db.Date
+  bonusType      String?  @db.Text
+  paymentStatus  String   @default("due_future") @db.Text
+  attachmentName String?  @db.Text
+  attachmentMime String?  @db.Text
+  attachmentBlob Bytes?
+  createdAt      DateTime @default(now()) @db.Timestamp(3)
+  createdBy      Int?
+
+  user          User  @relation("EmployeeBonusUser",    fields: [userId],    references: [id], onDelete: Cascade)
+  createdByUser User? @relation("EmployeeBonusCreator", fields: [createdBy], references: [id])
+}
+
+/// Junction table mapping multiple hiring managers to a job opening.
+/// JobOpening.hiringManagerId stores the "primary" hiring manager;
+/// this table holds the full multi-person list. Used in the Create Job
+/// wizard (Step 3) to capture every hiring manager involved in hiring
+/// for a role. INSERTs use ON CONFLICT DO NOTHING for idempotency
+/// (see src/app/api/hr/hiring/jobs/route.ts:311-316).
+///
+/// RESTORED 2026-06-12 after the table was accidentally dropped in
+/// the production incident. The model is declared explicitly here so
+/// a future `prisma db push` cannot silently drop it again. Original
+/// shape mirrors prisma/migrations/20260529180000_job_wizard_v1.
+model JobOpeningHiringManagerJoin {
+  jobOpeningId Int
+  userId       Int
+  createdAt    DateTime @default(now()) @db.Timestamp(3)
+
+  jobOpening JobOpening @relation("JobOpeningHiringManagerJoinJob",  fields: [jobOpeningId], references: [id], onDelete: Cascade)
+  user       User       @relation("JobOpeningHiringManagerJoinUser", fields: [userId],       references: [id], onDelete: Cascade)
+
+  @@id([jobOpeningId, userId])
+  @@index([userId])
+}
+
+/// Legacy per-candidate hiring-stage progression history. One row is
+/// written every time a candidate is moved between HiringStages —
+/// captures which stage they landed in, who moved them, when, and an
+/// optional free-text note. RESTRICT FKs on `stageId` / `movedById`
+/// preserve the audit trail by refusing to delete a stage or user that
+/// has ever been referenced; the stage-delete endpoint pre-checks this
+/// table to surface a friendly error instead of a raw 23503.
+///
+/// The `candidateId` column points at the legacy `Candidate` table
+/// from the 20260429 hiring migration. That table was never created
+/// in this database (the ATS now uses `JobApplication` end-to-end), so
+/// the FK to Candidate is intentionally omitted both in the DDL and in
+/// this Prisma model — `candidateId` is kept as a plain `Int` for
+/// historical-row compatibility.
+///
+/// Restored on 2026-06-12 after a `prisma db push` dropped the table.
+/// Keeping the model definition here ensures future db push runs leave
+/// the table alone.
+model CandidateStage {
+  id          Int      @id @default(autoincrement())
+  candidateId Int
+  stageId     Int
+  movedById   Int
+  notes       String?
+  movedAt     DateTime @default(now()) @db.Timestamp(3)
+
+  stage   HiringStage @relation("CandidateStageStage", fields: [stageId], references: [id], onDelete: Restrict)
+  movedBy User        @relation("CandidateStageMover", fields: [movedById], references: [id], onDelete: Restrict)
+
+  @@index([candidateId])
+}

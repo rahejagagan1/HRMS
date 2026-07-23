@@ -1,0 +1,86 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# Claude
+.claude
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+/env/
+
+# Local DB backups + raw dumps — never commit data exports
+/backups/
+*.dump
+*.sql.gz
+
+# Runtime uploads (CVs, JDs, KPI docs) — these are user-uploaded files
+# at runtime, not source. They live on the deploy host's disk (or an
+# object store) and must not pollute git history.
+/public/uploads/
+
+# One-off ops / diagnostic scripts — not part of the runtime app.
+# Existing tracked scripts remain in git; new untracked ones stay local.
+/scripts/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# prisma
+prisma/*.db
+prisma/*.db-journal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# logs
+logs/
+*.log
+# Added by code-review-graph
+.code-review-graph/
+
+# Tesseract.js language models — downloaded at runtime on first
+# OCR call. ~10MB, never belongs in the repo.
+*.traineddata
+
+# Local probe / smoke-test artifacts produced by scripts/
+/tmp-*.pdf
+/tmp-*.docx

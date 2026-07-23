@@ -1,0 +1,652 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+model User {
+  id                            Int                             @id @default(autoincrement())
+  clickupUserId                 BigInt                          @unique
+  name                          String
+  email                         String                          @unique
+  role                          UserRole                        @default(member)
+  orgLevel                      OrgLevel                        @default(member)
+  managerId                     Int?
+  teamCapsule                   String?
+  isActive                      Boolean                         @default(true)
+  reportAccess                  Boolean                         @default(false)
+  profilePictureUrl             String?
+  createdAt                     DateTime                        @default(now())
+  updatedAt                     DateTime                        @updatedAt
+  /// Monthly case delivery target for CM/PM (denominator for delivery %). Per-manager.
+  monthlyDeliveryTargetCases    Int?
+  assignedCases                 Case[]                          @relation("CaseAssignee")
+  editedCases                   Case[]                          @relation("CaseEditor")
+  researchedCases               Case[]                          @relation("CaseResearcher")
+  writtenCases                  Case[]                          @relation("CaseWriter")
+  caseAssignments               CaseAssignee[]
+  managerRatingsGiven           ManagerRating[]                 @relation("RatingManager")
+  managerRatingsReceived        ManagerRating[]                 @relation("RatedUser")
+  monthlyRatings                MonthlyRating[]
+  monthlyReports                MonthlyReport[]                 @relation("ManagerMonthlyReports")
+  scoreEditsMade                ScoreEditLog[]                  @relation("ScoreEditor")
+  scorecardConfigs              ScorecardConfig[]
+  assignedSubtasks              Subtask[]                       @relation("SubtaskAssignee")
+  teamRatingsReceived           TeamManagerRating[]             @relation("ManagerRated")
+  teamRatingsGiven              TeamManagerRating[]             @relation("TeamMemberRater")
+  manager                       User?                           @relation("TeamHierarchy", fields: [managerId], references: [id])
+  teamMembers                   User[]                          @relation("TeamHierarchy")
+  dashboardFeedbacks            UserFeedback[]
+  reportViewableBy              UserReportAccess[]              @relation("ReportViewable")
+  reportViewAccess              UserReportAccess[]              @relation("ReportViewer")
+  violationsReported            Violation[]                     @relation("ViolationReporter")
+  violationsResponsible         Violation[]                     @relation("ViolationResponsible")
+  violations                    Violation[]                     @relation("ViolationUser")
+  weeklyReports                 WeeklyReport[]                  @relation("ManagerWeeklyReports")
+  YoutubeDashUserQuarterChannel YoutubeDashUserQuarterChannel[]
+
+  @@index([managerId])
+}
+
+model UserFeedback {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  category  String   @default("general_issue")
+  message   String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Space {
+  id             Int       @id @default(autoincrement())
+  clickupSpaceId String    @unique
+  name           String
+  isSynced       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  capsules       Capsule[]
+}
+
+model Capsule {
+  id              Int              @id @default(autoincrement())
+  clickupFolderId String           @unique
+  spaceId         Int
+  name            String
+  shortName       String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  space           Space            @relation(fields: [spaceId], references: [id])
+  productionLists ProductionList[]
+}
+
+model ProductionList {
+  id            Int      @id @default(autoincrement())
+  clickupListId String   @unique
+  capsuleId     Int?
+  spaceId       Int?
+  name          String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  cases         Case[]
+  capsule       Capsule? @relation(fields: [capsuleId], references: [id])
+}
+
+model Case {
+  id                    Int            @id @default(autoincrement())
+  clickupTaskId         String         @unique
+  productionListId      Int
+  name                  String
+  status                String
+  statusType            String?
+  clickupUrl            String?
+  assigneeUserId        Int?
+  researcherUserId      Int?
+  writerUserId          Int?
+  editorUserId          Int?
+  caseRating            Decimal?       @db.Decimal(3, 1)
+  caseType              String?
+  channel               String?
+  tthDocLink            String?
+  title                 String?
+  scriptFirstDraftLink  String?
+  finalScriptLink       String?
+  voDocLink             String?
+  voLink                String?
+  videoFirstDraftLink   String?
+  finalVideoLink        String?
+  scriptQaStartDate     DateTime?
+  writerQualityScore    Int?
+  writerDeliveryTime    String?
+  writerEfficiencyScore String?
+  finalWriterRating     Decimal?       @db.Decimal(5, 2)
+  scriptQualityRating   Decimal?       @db.Decimal(4, 2)
+  scriptRatingReason    String?
+  videoGcStartDate      DateTime?
+  videoChangesCount     Int?
+  qaVideoMeetingDate    DateTime?
+  editorQualityScore    Int?
+  editorDeliveryTime    String?
+  editorEfficiencyScore String?
+  finalVideoRating      Decimal?       @db.Decimal(5, 2)
+  videoQualityRating    Decimal?       @db.Decimal(4, 2)
+  videoRatingReason     String?
+  helperEditorE         Int?
+  helperEditorT         Int?
+  helperWriterE         Int?
+  helperWriterT         Int?
+  uploadDate            DateTime?
+  caseStartDate         DateTime?
+  caseCompletionDate    DateTime?
+  overallTat            Decimal?       @db.Decimal(5, 1)
+  tat                   Decimal?       @db.Decimal(5, 1)
+  youtubeVideoUrl       String?
+  dateCreated           DateTime?
+  dateDone              DateTime?
+  lastSyncedAt          DateTime       @default(now())
+  isArchived            Boolean        @default(false)
+  assignee              User?          @relation("CaseAssignee", fields: [assigneeUserId], references: [id])
+  editor                User?          @relation("CaseEditor", fields: [editorUserId], references: [id])
+  productionList        ProductionList @relation(fields: [productionListId], references: [id])
+  researcher            User?          @relation("CaseResearcher", fields: [researcherUserId], references: [id])
+  writer                User?          @relation("CaseWriter", fields: [writerUserId], references: [id])
+  assignees             CaseAssignee[]
+  subtasks              Subtask[]
+  youtubeStats          YoutubeStats?
+
+  @@index([status])
+  @@index([statusType])
+  @@index([channel])
+  @@index([writerUserId])
+  @@index([editorUserId])
+  @@index([assigneeUserId])
+  @@index([researcherUserId])
+  @@index([productionListId])
+  @@index([dateCreated])
+}
+
+model CaseAssignee {
+  id            Int    @id @default(autoincrement())
+  caseId        Int
+  userId        Int
+  clickupUserId BigInt
+  case          Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user          User   @relation(fields: [userId], references: [id])
+
+  @@unique([caseId, userId])
+  @@index([caseId])
+  @@index([userId])
+}
+
+model Subtask {
+  id               Int       @id @default(autoincrement())
+  clickupTaskId    String    @unique
+  caseId           Int
+  name             String
+  status           String
+  statusType       String?
+  assigneeUserId   Int?
+  startDate        DateTime?
+  dueDate          DateTime?
+  dateDone         DateTime?
+  orderIndex       Int?
+  tat              Decimal?  @db.Decimal(5, 2)
+  customFieldsJson Json?
+  dateCreated      DateTime?
+  lastSyncedAt     DateTime  @default(now())
+  assignee         User?     @relation("SubtaskAssignee", fields: [assigneeUserId], references: [id])
+  case             Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([assigneeUserId])
+}
+
+model YoutubeStats {
+  id              Int                   @id @default(autoincrement())
+  caseId          Int                   @unique
+  youtubeVideoId  String
+  videoUrl        String
+  videoTitle      String?
+  viewCount       BigInt?
+  likeCount       BigInt?
+  commentCount    BigInt?
+  last30DaysViews BigInt?
+  publishedAt     DateTime?
+  lastFetchedAt   DateTime              @default(now())
+  ctr             Decimal?              @db.Decimal(5, 2)
+  case            Case                  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  history         YoutubeStatsHistory[]
+
+  @@index([youtubeVideoId])
+}
+
+model YoutubeStatsHistory {
+  id             Int          @id @default(autoincrement())
+  youtubeStatsId Int
+  snapshotDate   DateTime     @db.Date
+  viewCount      BigInt
+  likeCount      BigInt?
+  youtubeStats   YoutubeStats @relation(fields: [youtubeStatsId], references: [id], onDelete: Cascade)
+
+  @@unique([youtubeStatsId, snapshotDate])
+}
+
+model MonthlyRating {
+  id                   Int              @id @default(autoincrement())
+  userId               Int
+  month                DateTime         @db.Date
+  roleType             String
+  casesCompleted       Int              @default(0)
+  avgQualityScore      Decimal?         @db.Decimal(5, 2)
+  avgDeliveryScore     Decimal?         @db.Decimal(5, 2)
+  avgEfficiencyScore   Decimal?         @db.Decimal(5, 2)
+  totalViews           BigInt?
+  overallRating        Decimal?         @db.Decimal(5, 2)
+  rankInRole           Int?
+  isManualOverride     Boolean          @default(false)
+  calculatedAt         DateTime         @default(now())
+  writerQualityStars   Decimal?         @db.Decimal(3, 1)
+  scriptQualityStars   Decimal?         @db.Decimal(3, 1)
+  ownershipStars       Decimal?         @db.Decimal(3, 1)
+  monthlyTargetsStars  Decimal?         @db.Decimal(3, 1)
+  ytViewsStars         Decimal?         @db.Decimal(3, 1)
+  parametersJson       Json?
+  manualRatingsPending Boolean          @default(true)
+  formulaTemplateId    Int?
+  formulaVersion       Int?
+  formulaTemplate      FormulaTemplate? @relation(fields: [formulaTemplateId], references: [id])
+  user                 User             @relation(fields: [userId], references: [id])
+  editLogs             ScoreEditLog[]
+
+  @@unique([userId, month, roleType])
+  @@index([month])
+}
+
+model SyncLog {
+  id            Int       @id @default(autoincrement())
+  syncType      String
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+  recordsSynced Int?
+  errorsCount   Int?      @default(0)
+  errorDetails  Json?
+  status        String    @default("running")
+
+  @@index([syncType, status, completedAt])
+  @@index([startedAt])
+}
+
+model SyncConfig {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model YtVideoLookup {
+  id             Int       @id @default(autoincrement())
+  youtubeVideoId String    @unique
+  videoUrl       String
+  title          String
+  viewCount      BigInt
+  likeCount      BigInt?
+  commentCount   BigInt?
+  publishedAt    DateTime?
+  fetchedAt      DateTime  @default(now())
+}
+
+/// YouTube dashboard: videos published on/after YT_DASHBOARD_PUBLISHED_SINCE, refreshed on cron (e.g. every 5h).
+model YoutubeDashboardVideo {
+  id             Int       @id @default(autoincrement())
+  youtubeVideoId String    @unique
+  channelId      String
+  channelName    String
+  title          String
+  publishedAt    DateTime?
+  viewCount      BigInt
+  likeCount      BigInt?
+  syncedAt       DateTime  @default(now())
+
+  @@index([channelId])
+  @@index([publishedAt])
+  @@index([syncedAt])
+}
+
+/// YouTube dashboard: per-channel quarter view totals from YouTube Analytics (refreshed on manual / cron sync).
+model YoutubeDashboardQuarterMetrics {
+  id                   Int      @id @default(autoincrement())
+  channelId            String
+  year                 Int
+  quarter              Int
+  analyticsStartStr    String
+  analyticsEndStr      String
+  viewsGainedInQuarter BigInt?
+  fetchedAt            DateTime @default(now()) @updatedAt
+
+  @@unique([channelId, year, quarter])
+  @@index([year, quarter])
+}
+
+/// YouTube dashboard: per-channel 10-day bucket chart + uploads (filled on same cron as quarter metrics).
+model YoutubeDashboardChannelQuarterAnalysis {
+  id            Int      @id @default(autoincrement())
+  channelId     String
+  year          Int
+  quarter       Int
+  /// { analyticsStartStr, analyticsEndStr, buckets: [...], uploadsTotal }
+  chartJson     Json
+  headlineViews Int?
+  fetchedAt     DateTime @default(now()) @updatedAt
+
+  @@unique([channelId, year, quarter])
+  @@index([year, quarter])
+}
+
+model ScorecardConfig {
+  id            Int      @id @default(autoincrement())
+  userId        Int?
+  roleType      String
+  layoutType    String
+  metricsConfig Json
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User?    @relation(fields: [userId], references: [id])
+
+  @@unique([userId, roleType])
+  @@index([roleType])
+}
+
+model ScoreEditLog {
+  id              Int           @id @default(autoincrement())
+  monthlyRatingId Int
+  fieldName       String
+  oldValue        String
+  newValue        String
+  editedBy        Int
+  reason          String?
+  editedAt        DateTime      @default(now())
+  editor          User          @relation("ScoreEditor", fields: [editedBy], references: [id])
+  monthlyRating   MonthlyRating @relation(fields: [monthlyRatingId], references: [id], onDelete: Cascade)
+
+  @@index([monthlyRatingId])
+  @@index([editedBy])
+}
+
+model ManagerRating {
+  id           Int      @id @default(autoincrement())
+  managerId    Int
+  userId       Int
+  period       String
+  periodType   String
+  ratingsJson  Json
+  overallScore Decimal? @db.Decimal(5, 2)
+  comments     String?
+  isDraft      Boolean  @default(false)
+  submittedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  manager      User     @relation("RatingManager", fields: [managerId], references: [id])
+  user         User     @relation("RatedUser", fields: [userId], references: [id])
+
+  @@unique([managerId, userId, period, periodType])
+  @@index([userId])
+  @@index([managerId])
+  @@index([period])
+}
+
+/// Team members rate their manager (used in CM Pillar 5).
+/// Each team member submits one rating per period for their manager.
+/// The average across all team members is 50% of the combined pillar.
+model TeamManagerRating {
+  id           Int      @id @default(autoincrement())
+  teamMemberId Int
+  managerId    Int
+  period       String
+  periodType   String   @default("monthly")
+  ratingsJson  Json
+  overallScore Decimal? @db.Decimal(5, 2)
+  comments     String?
+  isAnonymous  Boolean  @default(true)
+  submittedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  manager      User     @relation("ManagerRated", fields: [managerId], references: [id])
+  teamMember   User     @relation("TeamMemberRater", fields: [teamMemberId], references: [id])
+
+  @@unique([teamMemberId, managerId, period, periodType])
+  @@index([managerId, period])
+  @@index([teamMemberId])
+}
+
+model RatingConfig {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model WeeklyReport {
+  id             Int      @id @default(autoincrement())
+  managerId      Int
+  week           Int
+  month          Int
+  year           Int
+  writerRows     Json?
+  editorRows     Json?
+  researcherRows Json?
+  overviewRows   Json?
+  viewsRows      Json?
+  dataJson       Json?
+  isLocked       Boolean  @default(true)
+  submittedAt    DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  manager        User     @relation("ManagerWeeklyReports", fields: [managerId], references: [id])
+
+  @@unique([managerId, week, month, year])
+  @@index([managerId])
+  @@index([year, month, week])
+}
+
+model MonthlyReport {
+  id                    Int      @id @default(autoincrement())
+  managerId             Int
+  month                 Int
+  year                  Int
+  isLocked              Boolean  @default(false)
+  submittedAt           DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  reportingPeriod       String?
+  executiveSummary      String?
+  totalVideoTarget      String?
+  totalVideoActual      String?
+  totalVideoVariance    String?
+  heroContentTarget     String?
+  heroContentActual     String?
+  heroContentVariance   String?
+  editorNotes           Json?
+  writerNotes           Json?
+  shortfallSummary      String?
+  teamRecognition       String?
+  keyLearning1          String?
+  keyLearning2          String?
+  keyLearning3          String?
+  risksAttention        String?
+  behavioralConcerns    String?
+  remark                String?
+  nishantResearcherRows Json?
+  nishantOverview       Json?
+  andrewA1Rows          Json?
+  andrewA2Rows          Json?
+  andrewBRows           Json?
+  andrewCRows           Json?
+  andrewDRows           Json?
+  hrMonthlyData         Json?
+  manager               User     @relation("ManagerMonthlyReports", fields: [managerId], references: [id])
+
+  @@unique([managerId, month, year])
+  @@index([managerId])
+  @@index([year, month])
+}
+
+model UserReportAccess {
+  id        Int  @id @default(autoincrement())
+  userId    Int
+  managerId Int
+  manager   User @relation("ReportViewable", fields: [managerId], references: [id], onDelete: Cascade)
+  viewer    User @relation("ReportViewer", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, managerId])
+  @@index([userId])
+  @@index([managerId])
+}
+
+model ChannelBaseline {
+  id            Int      @id @default(autoincrement())
+  channelName   String   @unique
+  baselineViews BigInt
+  updatedAt     DateTime @updatedAt
+}
+
+/// Versioned formula template for a role (writer, editor, etc.)
+/// Each template defines sections (pillars), weights, and guardrails.
+/// Only ONE template per roleType should have isActive = true at a time.
+model FormulaTemplate {
+  id              Int             @id @default(autoincrement())
+  roleType        String
+  version         Int             @default(1)
+  isActive        Boolean         @default(false)
+  label           String
+  description     String?
+  /// Array of FormulaSection objects (see src/lib/ratings/types.ts)
+  sections        Json
+  /// Array of GuardrailRule objects (optional)
+  guardrails      Json?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  /// Whether to round pillar star results to nearest integer (default true)
+  roundOff        Boolean         @default(true)
+  /// Optional: user IDs assigned to this template (for roles like researcher where
+  /// multiple sub-groups share the same UserRole but have different formulas).
+  /// When set, only these users are included in batch calculation for this template.
+  assignedUserIds Json?
+  monthlyRatings  MonthlyRating[]
+
+  @@unique([roleType, version])
+  @@index([roleType])
+  @@index([isActive])
+}
+
+model ResearcherPipelineSnapshot {
+  id                       Int      @id @default(autoincrement())
+  month                    DateTime @unique @db.Date
+  rtcCount                 Int      @default(0)
+  foiaCount                Int      @default(0)
+  totalCount               Int      @default(0)
+  rtcCaseRatingAvg         Decimal? @db.Decimal(5, 2)
+  foiaCaseRatingAvg        Decimal? @db.Decimal(5, 2)
+  /// Parent-task count in "{Month} FOIA Pitched Cases" (ClickUp); pipeline target count still uses MonthlyReport.
+  foiaPitchedCount         Int      @default(0)
+  foiaPitchedCaseRatingAvg Decimal? @db.Decimal(5, 2)
+  caseRatingAvgCombined    Decimal? @db.Decimal(5, 2)
+  rtcListName              String?
+  foiaListName             String?
+  foiaPitchedListName      String?
+  snapshotData             Json?
+  syncError                String?
+  syncedAt                 DateTime @default(now())
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([month])
+}
+
+model Violation {
+  id                  Int               @id @default(autoincrement())
+  userId              Int
+  reportedBy          Int
+  title               String            @default("")
+  description         String?
+  severity            ViolationSeverity @default(medium)
+  status              ViolationStatus   @default(open)
+  category            String?
+  actionTaken         String?
+  notes               String?
+  violationDate       DateTime?
+  responsiblePersonId Int?
+  resolvedAt          DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  reporter            User              @relation("ViolationReporter", fields: [reportedBy], references: [id])
+  responsiblePerson   User?             @relation("ViolationResponsible", fields: [responsiblePersonId], references: [id])
+  user                User              @relation("ViolationUser", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([reportedBy])
+  @@index([status])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+model YoutubeDashUserQuarterChannel {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  channelId  String
+  year       Int
+  quarter    Int
+  videoCount Int      @default(0)
+  viewsSum   BigInt   @default(0)
+  computedAt DateTime @default(now())
+  User       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId, year, quarter])
+  @@index([channelId, year, quarter])
+  @@index([userId, year, quarter])
+}
+
+enum UserRole {
+  admin
+  manager
+  lead
+  sub_lead
+  writer
+  editor
+  qa
+  researcher
+  gc
+  vo_artist
+  publisher
+  production_manager
+  hr_manager
+  researcher_manager
+  member
+}
+
+enum OrgLevel {
+  ceo
+  special_access
+  hod
+  manager
+  hr_manager
+  lead
+  sub_lead
+  production_team
+  member
+}
+
+enum ViolationSeverity {
+  low
+  medium
+  high
+  critical
+}
+
+enum ViolationStatus {
+  open
+  in_progress
+  closed
+}

@@ -1,0 +1,16 @@
+Listing page: https://studio.nbmedia.co.in/jobs
+
+Per-role pages — these are your ad destination URLs:
+
+
+https://studio.nbmedia.co.in/jobs/sr-video-editor-18
+https://studio.nbmedia.co.in/jobs/senior-sound-designer-4-5-years-experience-19
+https://studio.nbmedia.co.in/jobs/senior-social-media-strategist-16
+https://studio.nbmedia.co.in/jobs/hr-it-coordinator-14
+https://studio.nbmedia.co.in/jobs/customer-service-specialist-13
+https://studio.nbmedia.co.in/jobs/business-development-executive-12
+https://studio.nbmedia.co.in/jobs/script-writer-7
+https://studio.nbmedia.co.in/jobs/content-researcher-4
+https://studio.nbmedia.co.in/jobs/social-media-script-writer-short-form-content-3
+https://studio.nbmedia.co.in/jobs/content-creator-2
+https://studio.nbmedia.co.in/jobs/artificial-intelligence-research-specialist-1

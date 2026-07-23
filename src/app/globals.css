@@ -1,0 +1,747 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  font-size: 17px;
+}
+
+/* Device-native font stack — resolves to the OS's best UI font:
+     macOS / iOS / iPadOS → -apple-system / BlinkMacSystemFont (SF Pro)
+     Windows              → "Segoe UI"
+     Android              → Roboto
+     Linux                → "Noto Sans" / "Liberation Sans"
+     Final fallbacks      → Arial, sans-serif + emoji fonts.
+   Kept behind the `--font-mulish` variable so every existing
+   `font-[--font-mulish]` class continues to work with zero changes. */
+:root {
+  --font-mulish:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans", "Liberation Sans", Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+html, body {
+  font-family: var(--font-mulish) !important;
+}
+/* Override stray inline fontFamily declarations (pages that hardcode
+   "Segoe UI", "Arial", etc.) — but keep monospace utility + rich-text
+   editor fonts intact. */
+body *:not(pre):not(code):not(.font-mono):not([class*="font-["]):not([class*="ql-font-"]):not([class*="ql-picker"]):not(.ql-editor):not(.ql-editor *) {
+  font-family: var(--font-mulish) !important;
+}
+
+:root {
+  --background: #f5f5f7;
+  --foreground: #1a1a2e;
+  --card-bg: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.08);
+  --sidebar-bg: #ffffff;
+  --header-bg: rgba(255, 255, 255, 0.8);
+}
+
+.dark {
+  --background: #28283a;
+  --foreground: #e8e8f2;
+  --card-bg: #32324a;
+  --card-border: rgba(255, 255, 255, 0.09);
+  --sidebar-bg: #22223a;
+  --header-bg: rgba(40, 40, 58, 0.88);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+::selection {
+  background-color: #7c3aed; /* violet-600 */
+  color: #ffffff;
+}
+
+::-moz-selection {
+  background-color: #7c3aed; /* violet-600 */
+  color: #ffffff;
+}
+
+/* ═══════════════════════════════════════════════
+   LIGHT MODE OVERRIDES
+   Automatically transforms hardcoded dark colors
+   when .dark class is NOT on <html>
+   ═══════════════════════════════════════════════ */
+
+/* ── Card / Panel backgrounds ── */
+html:not(.dark) .bg-\[\#12122a\],
+html:not(.dark) .bg-\[\#11112a\],
+html:not(.dark) .bg-\[\#0e0e24\],
+html:not(.dark) .bg-\[\#1a1a2e\],
+html:not(.dark) .bg-\[\#1a1a32\],
+html:not(.dark) .bg-\[\#1a1a35\],
+html:not(.dark) .bg-\[\#1a1a3a\],
+html:not(.dark) .bg-\[\#0f0f23\],
+html:not(.dark) .bg-\[\#16162a\],
+html:not(.dark) .bg-\[\#0d0d20\] {
+  background: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.09) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* ── Inner / secondary cards ── */
+html:not(.dark) .bg-slate-100 {
+  background: #f3f4f6 !important;
+  border-color: rgba(0, 0, 0, 0.07) !important;
+}
+html:not(.dark) .rounded-2xl.bg-slate-100,
+html:not(.dark) .rounded-xl.bg-slate-100 {
+  background: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.09) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* ── Sidebar ── */
+html:not(.dark) .bg-\[\#0a0a1a\] {
+  background: #f8fafc !important;
+}
+
+/* Sidebar nav text — make readable on light bg */
+html:not(.dark) aside nav .text-slate-500,
+html:not(.dark) aside nav .text-slate-400 {
+  color: #475569 !important;
+}
+html:not(.dark) aside nav .hover\:text-emerald-600:hover {
+  color: #059669 !important;
+}
+html:not(.dark) aside nav .hover\:bg-black\/5:hover {
+  background: rgba(0, 0, 0, 0.05) !important;
+}
+/* Section labels */
+html:not(.dark) aside nav .text-slate-600 {
+  color: #94a3b8 !important;
+  letter-spacing: 0.1em;
+}
+
+/* ── Page background ── */
+html:not(.dark) .bg-\[\#080816\] {
+  background: var(--background) !important;
+}
+
+/* ── White → near-black text ── */
+html:not(.dark) .text-white {
+  color: #111827 !important;
+}
+
+/* Preserve white text on colored backgrounds (buttons, badges, active
+   tabs). We list both the Tailwind palette names AND arbitrary-hex
+   backgrounds (Tailwind v3 `bg-[#xxxxxx]` syntax) — the brand blue
+   `bg-[#008CFF]` and friends used to be missed by the palette-only
+   selectors, which made every selected tab / primary button / badge
+   render with dark text in light mode. */
+html:not(.dark) [class*="bg-emerald-"].text-white,
+html:not(.dark) [class*="bg-green-"].text-white,
+html:not(.dark) [class*="bg-violet-"].text-white,
+html:not(.dark) [class*="bg-indigo-"].text-white,
+html:not(.dark) [class*="bg-blue-"].text-white,
+html:not(.dark) [class*="bg-red-"].text-white,
+html:not(.dark) [class*="bg-amber-"].text-white,
+html:not(.dark) [class*="bg-orange-"].text-white,
+html:not(.dark) [class*="bg-pink-"].text-white,
+html:not(.dark) [class*="bg-rose-"].text-white,
+html:not(.dark) [class*="bg-teal-"].text-white,
+html:not(.dark) [class*="bg-cyan-"].text-white,
+html:not(.dark) [class*="bg-slate-6"].text-white,
+html:not(.dark) [class*="bg-slate-7"].text-white,
+html:not(.dark) [class*="bg-slate-8"].text-white,
+html:not(.dark) [class*="bg-slate-9"].text-white,
+html:not(.dark) [class*="bg-gray-6"].text-white,
+html:not(.dark) [class*="bg-gray-7"].text-white,
+html:not(.dark) [class*="bg-gray-8"].text-white,
+html:not(.dark) [class*="bg-gray-9"].text-white,
+/* Arbitrary-hex Tailwind backgrounds — bg-[#008CFF], bg-[#0070cc] etc.
+   IMPORTANT: only matches when bg-[#...] and text-white sit on the SAME
+   element. The descendant version (`bg-[#…] .text-white`) used to be
+   here but it was catastrophically broad — the LayoutShell wrapper has
+   `bg-[#f4f7fb]` (the light page background), so every `.text-white`
+   descendant on every page was forced white → invisible page titles. */
+html:not(.dark) [class*="bg-[#"].text-white {
+  color: #ffffff !important;
+}
+html:not(.dark) th.text-white {
+  color: #ffffff !important;
+}
+
+/* Ghost / outlined buttons that use `bg-white/*` or `bg-black/*` as their
+   resting background but include a `bg-violet-*` / `bg-emerald-*` hover class
+   were matching the "preserve white text" rule above and rendering invisible.
+   Force their text dark — the colored hover bg is fleeting, the base stays light. */
+html:not(.dark) [class*="bg-white/"].text-white,
+html:not(.dark) [class*="bg-white/"] .text-white,
+html:not(.dark) .bg-transparent.text-white,
+html:not(.dark) [class*="bg-black/"].text-white {
+  color: #111827 !important;
+}
+
+/* Count-chip badges (e.g. the "42" / "99+" pills on company-tab
+   buttons) — when the chip uses `bg-white/20` over an active blue
+   button, the ghost-button rule above forces dark text. Restore
+   white text just for that specific count-chip shape: a small
+   inline-flex pill with bg-white/ AND text-white AND a rounded-full
+   class. The extra attribute selector keeps the override surgical
+   so generic ghost-buttons (which legitimately need dark text in
+   light mode) aren't affected. */
+html:not(.dark) [class*="bg-white/"][class*="rounded-full"][class*="text-white"][class*="inline-flex"] {
+  color: #ffffff !important;
+}
+
+/* ── Slate text → readable dark grays ── */
+html:not(.dark) .text-slate-200 { color: #374151 !important; }
+html:not(.dark) .text-slate-300 { color: #374151 !important; }
+html:not(.dark) .text-slate-400 { color: #4b5563 !important; }
+html:not(.dark) .text-slate-500 { color: #6b7280 !important; }
+html:not(.dark) .text-slate-600 { color: #374151 !important; }
+html:not(.dark) .text-gray-400  { color: #4b5563 !important; }
+html:not(.dark) .text-gray-500  { color: #6b7280 !important; }
+
+/* ── Light-variant colored text → darker in light mode ── */
+html:not(.dark) .text-emerald-300 { color: #059669 !important; }
+html:not(.dark) .text-emerald-400 { color: #047857 !important; }
+html:not(.dark) .text-green-300   { color: #16a34a !important; }
+html:not(.dark) .text-green-400   { color: #15803d !important; }
+html:not(.dark) .text-amber-300   { color: #b45309 !important; }
+html:not(.dark) .text-amber-400   { color: #92400e !important; }
+html:not(.dark) .text-yellow-300  { color: #a16207 !important; }
+html:not(.dark) .text-orange-300  { color: #c2410c !important; }
+html:not(.dark) .text-orange-400  { color: #b45309 !important; }
+html:not(.dark) .text-blue-300    { color: #1d4ed8 !important; }
+html:not(.dark) .text-blue-400    { color: #1e40af !important; }
+html:not(.dark) .text-violet-300  { color: #6d28d9 !important; }
+html:not(.dark) .text-violet-400  { color: #5b21b6 !important; }
+html:not(.dark) .text-purple-300  { color: #6d28d9 !important; }
+html:not(.dark) .text-purple-400  { color: #5b21b6 !important; }
+html:not(.dark) .text-red-300     { color: #b91c1c !important; }
+html:not(.dark) .text-red-400     { color: #991b1b !important; }
+html:not(.dark) .text-pink-300    { color: #be185d !important; }
+html:not(.dark) .text-pink-400    { color: #9d174d !important; }
+html:not(.dark) .text-rose-300    { color: #be123c !important; }
+html:not(.dark) .text-rose-400    { color: #9f1239 !important; }
+html:not(.dark) .text-cyan-300    { color: #0e7490 !important; }
+html:not(.dark) .text-cyan-400    { color: #155e75 !important; }
+html:not(.dark) .text-teal-300    { color: #0f766e !important; }
+html:not(.dark) .text-teal-400    { color: #0d5f57 !important; }
+
+/* ── Manual-entry highlight: red text on report inputs filled in by hand.
+   The light-mode rule below (line ~282) forces ALL inputs/textareas/selects
+   to color: #111827 !important with specificity (0,0,4,2). To override it
+   we prepend `html:not(.dark)` / `html.dark` which adds a class selector,
+   pushing this rule to (0,0,5,2) — wins in both light and dark mode.
+   Covers plain inputs, textareas, selects, and ReactQuill rich-text editors. */
+html:not(.dark) input.manual-entry:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html.dark      input.manual-entry:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html:not(.dark) textarea.manual-entry,
+html.dark      textarea.manual-entry,
+html:not(.dark) select.manual-entry,
+html.dark      select.manual-entry,
+.quill-manual-entry .ql-editor,
+.quill-manual-entry .ql-editor * {
+  color: #ef4444 !important;
+}
+
+/* ── Border overrides ── */
+html:not(.dark) .border-white\/5,
+html:not(.dark) .border-white\/10,
+html:not(.dark) .border-white\/15,
+html:not(.dark) .border-white\/20,
+html:not(.dark) .border-white\/\[0\.02\],
+html:not(.dark) .border-white\/\[0\.03\],
+html:not(.dark) .border-white\/\[0\.05\],
+html:not(.dark) .border-white\/\[0\.08\] {
+  border-color: rgba(0, 0, 0, 0.09) !important;
+}
+
+/* ── Divide ── */
+html:not(.dark) .divide-white\/\[0\.03\] > :not([hidden]) ~ :not([hidden]),
+html:not(.dark) .divide-white\/5 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(0, 0, 0, 0.07) !important;
+}
+
+/* ── Semi-transparent white backgrounds → subtle grays ── */
+html:not(.dark) .bg-white\/3,
+html:not(.dark) .bg-white\/\[0\.03\] { background: rgba(0, 0, 0, 0.03) !important; }
+html:not(.dark) .bg-white\/5,
+html:not(.dark) .bg-white\/\[0\.05\] { background: rgba(0, 0, 0, 0.04) !important; }
+html:not(.dark) .bg-white\/\[0\.02\] { background: rgba(0, 0, 0, 0.02) !important; }
+html:not(.dark) .bg-white\/10        { background: rgba(0, 0, 0, 0.05) !important; }
+html:not(.dark) .bg-white\/20        { background: rgba(0, 0, 0, 0.07) !important; }
+
+html:not(.dark) .hover\:bg-white\/5:hover,
+html:not(.dark) .hover\:bg-white\/\[0\.02\]:hover { background: rgba(0, 0, 0, 0.05) !important; }
+html:not(.dark) .hover\:bg-white\/10:hover         { background: rgba(0, 0, 0, 0.07) !important; }
+
+/* ── Colored tinted backgrounds ── */
+html:not(.dark) .bg-emerald-500\/10,
+html:not(.dark) .bg-emerald-500\/15,
+html:not(.dark) .bg-emerald-500\/20 { background: rgba(16, 185, 129, 0.1) !important; }
+html:not(.dark) .bg-violet-500\/10,
+html:not(.dark) .bg-violet-500\/15,
+html:not(.dark) .bg-violet-600\/20  { background: rgba(124, 58, 237, 0.1) !important; }
+html:not(.dark) .bg-amber-500\/10,
+html:not(.dark) .bg-amber-500\/15,
+html:not(.dark) .bg-amber-500\/20   { background: rgba(245, 158, 11, 0.1) !important; }
+html:not(.dark) .bg-blue-500\/10,
+html:not(.dark) .bg-blue-500\/15,
+html:not(.dark) .bg-blue-500\/20    { background: rgba(59, 130, 246, 0.1) !important; }
+html:not(.dark) .bg-red-500\/10,
+html:not(.dark) .bg-red-500\/15,
+html:not(.dark) .bg-red-500\/20     { background: rgba(239, 68, 68, 0.1) !important; }
+html:not(.dark) .bg-pink-500\/10,
+html:not(.dark) .bg-pink-500\/15,
+html:not(.dark) .bg-pink-500\/20    { background: rgba(236, 72, 153, 0.1) !important; }
+html:not(.dark) .bg-orange-500\/10,
+html:not(.dark) .bg-orange-500\/15,
+html:not(.dark) .bg-orange-500\/20  { background: rgba(249, 115, 22, 0.1) !important; }
+html:not(.dark) .bg-green-500\/10,
+html:not(.dark) .bg-green-500\/15,
+html:not(.dark) .bg-green-600\/20   { background: rgba(34, 197, 94, 0.1) !important; }
+html:not(.dark) .bg-teal-500\/10,
+html:not(.dark) .bg-teal-500\/15    { background: rgba(20, 184, 166, 0.1) !important; }
+html:not(.dark) .bg-cyan-500\/10,
+html:not(.dark) .bg-cyan-500\/15    { background: rgba(6, 182, 212, 0.1) !important; }
+
+/* ── Inputs, selects, textareas ── */
+html:not(.dark) input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html:not(.dark) select,
+html:not(.dark) textarea {
+  background: #ffffff !important;
+  border-color: rgba(0, 0, 0, 0.15) !important;
+  color: #111827 !important;
+}
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: #9ca3af !important;
+}
+html:not(.dark) select option {
+  background: #ffffff;
+  color: #111827;
+}
+
+/* ── Slate tinted backgrounds → light grays ── */
+html:not(.dark) .bg-slate-700\/50,
+html:not(.dark) .bg-slate-700\/40,
+html:not(.dark) .bg-slate-800\/50 { background: rgba(0, 0, 0, 0.05) !important; }
+html:not(.dark) .bg-slate-600\/50,
+html:not(.dark) .bg-slate-600\/30 { background: rgba(0, 0, 0, 0.04) !important; }
+html:not(.dark) .bg-slate-500\/10,
+html:not(.dark) .bg-slate-500\/15 { background: rgba(0, 0, 0, 0.04) !important; }
+
+/* Preserve text on truly dark solid buttons (slate-600, slate-700, slate-800) */
+html:not(.dark) .bg-slate-700.text-white,
+html:not(.dark) .bg-slate-800.text-white,
+html:not(.dark) .bg-slate-900.text-white { color: #ffffff !important; }
+html:not(.dark) .bg-slate-700\/50 .text-slate-400 { color: #6b7280 !important; }
+
+/* ── Scrollbar ── */
+html:not(.dark) ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+html:not(.dark) ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* Hide the little ▲▼ arrow buttons that Chromium/Brave render at the
+   top/bottom of scrollbar tracks. Pure-thumb scrollbars look cleaner
+   and match the rest of the app's minimal aesthetic. */
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Utility: fully hide a scrollbar while keeping the element scrollable.
+   Used on the home dashboard targets/feed column so no track shows. */
+.no-scrollbar {
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* old Edge / IE */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;                /* Chromium / WebKit */
+  width: 0;
+  height: 0;
+}
+
+/* ═══════════════════════════════════════════════
+   DARK MODE — lighten hardcoded near-black colours
+   ═══════════════════════════════════════════════ */
+
+/* Page / main backgrounds */
+html.dark .bg-\[\#080816\] {
+  background: #28283a !important;
+}
+
+/* Card / panel backgrounds */
+html.dark .bg-\[\#12122a\],
+html.dark .bg-\[\#0e0e24\] {
+  background: #32324a !important;
+}
+
+/* Secondary/inner cards */
+html.dark .bg-\[\#1a1a2e\],
+html.dark .bg-\[\#1a1a32\],
+html.dark .bg-\[\#1a1a35\],
+html.dark .bg-\[\#1a1a3a\],
+html.dark .bg-\[\#0f0f23\] {
+  background: #363650 !important;
+}
+
+/* Sidebar */
+html.dark .bg-\[\#0a0a1a\] {
+  background: #22223a !important;
+}
+
+/* Header blur panel */
+html.dark .bg-\[\#0d0d1f\]\/80,
+html.dark .bg-\[rgba\(13\,13\,31\,0\.8\)\] {
+  background: rgba(40, 40, 58, 0.88) !important;
+}
+
+/* Slightly lifted inner cards */
+html.dark .bg-slate-100 {
+  background: #3a3a52 !important;
+}
+
+html.dark .bg-white\/5 {
+  background: rgba(255, 255, 255, 0.07) !important;
+}
+
+html.dark .bg-white\/\[0\.02\] {
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* ═══════════════════════════════════════════════ */
+
+/* Dark mode scrollbar inside light-background containers (e.g. weekly report tables) */
+.dark .overflow-x-auto::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.6);
+}
+
+.dark .overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.85);
+}
+
+.dark .overflow-x-auto::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* Table row hover in light mode */
+html:not(.dark) .hover\:bg-white\/\[0\.02\]:hover {
+  background: rgba(0, 0, 0, 0.03) !important;
+}
+
+/* ═══════════════════════════════════════════════ */
+
+/* Slim, professional scrollbar for the Approvals flyout list. */
+.approvals-flyout-scroll::-webkit-scrollbar        { width: 5px; }
+.approvals-flyout-scroll::-webkit-scrollbar-track  { background: transparent; }
+.approvals-flyout-scroll::-webkit-scrollbar-thumb  {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    transition: background-color 0.15s;
+}
+.approvals-flyout-scroll:hover::-webkit-scrollbar-thumb       { background: rgba(255, 255, 255, 0.3); }
+.approvals-flyout-scroll::-webkit-scrollbar-thumb:hover       { background: rgba(255, 255, 255, 0.45); }
+
+/* Custom scrollbar (dark mode defaults) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+html:not(.dark) .glass {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* ═══════════════════════════════════════════════
+   QUILL EDITOR CUSTOM FONTS
+   ═══════════════════════════════════════════════ */
+.ql-font-inter { font-family: var(--font-mulish), sans-serif; }
+.ql-font-calibri { font-family: 'Calibri', sans-serif; }
+.ql-font-cambria { font-family: 'Cambria', serif; }
+.ql-font-times-new-roman { font-family: 'Times New Roman', serif; }
+.ql-font-arial { font-family: 'Arial', sans-serif; }
+.ql-font-arial-black { font-family: 'Arial Black', sans-serif; }
+.ql-font-arial-narrow { font-family: 'Arial Narrow', sans-serif; }
+.ql-font-bahnschrift { font-family: 'Bahnschrift', sans-serif; }
+.ql-font-book-antiqua { font-family: 'Book Antiqua', serif; }
+.ql-font-bookman-old-style { font-family: 'Bookman Old Style', serif; }
+.ql-font-bookshelf-symbol-7 { font-family: 'Bookshelf Symbol 7', serif; }
+.ql-font-bradley-hand-itc { font-family: 'Bradley Hand ITC', cursive; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="inter"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="inter"]::before { content: 'Inter'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="calibri"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="calibri"]::before { content: 'Calibri'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="cambria"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="cambria"]::before { content: 'Cambria'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="times-new-roman"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="times-new-roman"]::before { content: 'Times New Roman'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="arial"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="arial"]::before { content: 'Arial'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="arial-black"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="arial-black"]::before { content: 'Arial Black'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="arial-narrow"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="arial-narrow"]::before { content: 'Arial Narrow'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="bahnschrift"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="bahnschrift"]::before { content: 'Bahnschrift'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="book-antiqua"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="book-antiqua"]::before { content: 'Book Antiqua'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="bookman-old-style"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="bookman-old-style"]::before { content: 'Bookman Old Style'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="bookshelf-symbol-7"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="bookshelf-symbol-7"]::before { content: 'Bookshelf Symbol 7'; }
+
+.ql-snow .ql-picker.ql-font .ql-picker-label[data-value="bradley-hand-itc"]::before,
+.ql-snow .ql-picker.ql-font .ql-picker-item[data-value="bradley-hand-itc"]::before { content: 'Bradley Hand ITC'; }
+
+/* Increase width of the font picker so long names fit */
+.ql-snow .ql-picker.ql-font {
+  width: 160px;
+}
+
+/* ═══════════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════════ */
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Skeleton shimmer — sweeps a soft white gradient left-to-right
+   across the muted grey base block. Powers <Skeleton> from
+   src/components/ui/Skeleton.tsx. 1.4s feels alive without being
+   distracting on long loads. */
+@keyframes skeletonShimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%);  }
+}
+
+.animate-slide-in {
+  animation: slideIn 0.25s ease-out;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-skeleton-shimmer {
+  animation: skeletonShimmer 1.4s ease-in-out infinite;
+}
+
+/* Top-anchored toast: slides down from above + fades in. Paired with
+   a 5s setTimeout in React for the dismiss; on unmount the element
+   simply detaches (no exit animation — the page is already idle by
+   then so it's not visually jarring). */
+@keyframes toastIn {
+  from { opacity: 0; transform: translate(-50%, -12px); }
+  to   { opacity: 1; transform: translate(-50%,   0  ); }
+}
+.animate-toast-in {
+  animation: toastIn 0.22s ease-out;
+}
+/* ── JD prose ──────────────────────────────────────────────────────
+   Typography for the sanitised Quill-authored job description body
+   on the public careers page (src/app/jobs/[slug]/page.tsx). The
+   parent .jd-prose wrapper sits inside a Times-New-Roman container,
+   so we only need to size/space the block tags here — the font
+   family is inherited. Mirrors what the legacy plain-text renderer
+   produces so a switch between the two paths is visually seamless.
+
+   Quill's classes for alignment + size are also styled inline below
+   so HR's toolbar choices (Small / Large / Huge, centre / right /
+   justify) flow through to the public render verbatim. */
+/* Word-wrap inside the prose. Long, unbreakable strings (URLs,
+   identifiers, glued tokens) used to overflow the JD card's
+   overflow:hidden clip — letters appeared chopped at the right
+   edge. overflow-wrap:anywhere is the guaranteed fallback; the
+   browser still prefers word boundaries when they exist. */
+.jd-prose,
+.jd-prose * {
+  /* Two-rule wrap that handles both extremes cleanly:
+     - word-break:normal      → standard word boundaries (don't
+                                 break a word mid-letter unless
+                                 there's absolutely no other
+                                 option).
+     - overflow-wrap:anywhere → safety net for a token that's
+                                 wider than the entire line (long
+                                 URL, identifier). Browser prefers
+                                 word boundaries first; only
+                                 cracks the word open when there's
+                                 literally no break point that
+                                 keeps it whole.
+     - hyphens:none           → no auto-hyphenation; ignore &shy;.
+     - text-wrap:wrap         → cancel Chrome 120+'s default
+                                 `pretty` which sometimes breaks
+                                 "in" / "is" to balance line
+                                 widths.
+     - white-space:normal     → ignore any inherited pre / pre-
+                                 line that would suppress wrapping.
+     max-width + box-sizing prevent inline children from pushing
+     beyond the prose container.
+
+     The combination means: normal English words stay intact, and
+     only a pathological 200-char URL would ever break. That's
+     the A4 reading model HR wants. */
+  overflow-wrap: anywhere !important;
+  word-wrap:     break-word !important;
+  word-break:    normal !important;
+  hyphens:       none !important;
+  text-wrap:     wrap !important;
+  white-space:   normal !important;
+  max-width:     100%;
+  box-sizing:    border-box;
+}
+/* Heading / paragraph / list rules below MIRROR the Edit JD modal's
+   editor styles (.jd-quill-wrap .ql-editor further down + Quill's own
+   snow defaults) 1:1 — same sizes, margins, hairline rules, colors —
+   so the JD a candidate reads is formatted exactly like what HR sees
+   while editing. Change them TOGETHER or the two drift apart again. */
+.jd-prose h1 {
+  /* Editor: Quill snow default — 2em of the 14.5px body, no margins. */
+  margin: 0;
+  font-size: 29px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.3;
+}
+.jd-prose h2 {
+  /* Mirrors .jd-quill-wrap .ql-editor h2 (centered title-style). */
+  margin: 18px 0 14px;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  color: #0f172a;
+}
+.jd-prose h3 {
+  /* Mirrors .jd-quill-wrap .ql-editor h3 — incl. the hairline rule
+     under section headings HR sees in the editor. */
+  margin: 16px 0 6px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 4px;
+}
+.jd-prose h1:first-child,
+.jd-prose h2:first-child,
+.jd-prose h3:first-child { margin-top: 0; }
+.jd-prose p {
+  /* ZERO vertical margins — Quill's editor renders every <p> flush
+     (its default stylesheet), and JDs extracted from PDFs store each
+     visual line as its own <p>. Any margin here blows those wrapped
+     lines apart into gappy fragments on the public page while the
+     edit modal looks fine. Paragraph separation comes from the
+     explicit blank lines HR sees in the editor (<p><br></p>), which
+     render as an empty line — exactly like Quill. */
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: #1e293b;
+}
+.jd-prose ul, .jd-prose ol {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+.jd-prose ul { list-style: disc; }
+.jd-prose ol { list-style: decimal; }
+.jd-prose li {
+  margin: 2px 0;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: #1e293b;
+}
+.jd-prose strong, .jd-prose b { font-weight: 700; color: #0f172a; }
+.jd-prose em, .jd-prose i    { font-style: italic; }
+.jd-prose u                  { text-decoration: underline; }
+.jd-prose s, .jd-prose strike{ text-decoration: line-through; }
+/* Quill alignment classes */
+.jd-prose .ql-align-center  { text-align: center;  }
+.jd-prose .ql-align-right   { text-align: right;   }
+.jd-prose .ql-align-justify { text-align: justify; }
+/* Quill size classes */
+.jd-prose .ql-size-small { font-size: 12.5px; }
+.jd-prose .ql-size-large { font-size: 17.5px; }
+.jd-prose .ql-size-huge  { font-size: 22px;   line-height: 1.4; }
+
+/* JD edit modal — Quill toolbar + editor styling. The wrap inherits
+   Times New Roman from the parent so the editor body matches the
+   rendered PDF; the toolbar uses the default sans-serif for clarity. */
+.jd-quill-wrap .ql-toolbar.ql-snow {
+  border: none;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+.jd-quill-wrap .ql-container.ql-snow { border: none; }
+.jd-quill-wrap .ql-editor {
+  min-height: 360px;
+  padding: 16px 20px;
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: #1e293b;
+}
+/* Auto-formatted JD structure — h2 = job title (centered),
+   h3 = section heading. Quill applies "ql-align-center" class to
+   centered blocks, so honour that too in case the extractor's
+   inline style gets stripped. */
+.jd-quill-wrap .ql-editor h2 {
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  margin: 18px 0 14px;
+  color: #0f172a;
+}
+.jd-quill-wrap .ql-editor h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 16px 0 6px;
+  color: #0f172a;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 4px;
+}
+.jd-quill-wrap .ql-editor .ql-align-center { text-align: center; }
+.jd-quill-wrap .ql-editor ul,
+.jd-quill-wrap .ql-editor ol { padding-left: 24px; margin: 6px 0; }
+.jd-quill-wrap .ql-editor li { margin: 2px 0; }
