@@ -625,22 +625,10 @@ function ProfileTab({ c }: { c: Candidate }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
       <div className="lg:col-span-3 space-y-5">
-        {/* Info chips */}
+        {/* Info chips — inline-editable (HR can fix / fill fields the
+            resume parser missed). Mirrors the Skills / Education editors. */}
         <Card>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5">
-            <InfoChip Icon={Calendar}    tone="amber"   label="Available To Join (in days)"
-              value={c.availableToJoinDays != null ? `${c.availableToJoinDays} days` : "—"} />
-            <InfoChip Icon={Briefcase}   tone="slate"   label="Experience"
-              value={fmtExperience(c.experienceYears, c.experienceMonths)} />
-            <InfoChip Icon={MapPin}      tone="orange"  label="Location"
-              value={locationLabel} />
-            <InfoChip Icon={IndianRupee} tone="emerald" label="Current Salary"
-              value={c.currentSalary != null ? fmtMoneyINR(c.currentSalary) + " (Monthly)" : "—"} />
-            <InfoChip Icon={IndianRupee} tone="emerald" label="Expected Salary"
-              value={c.expectedSalary != null ? fmtMoneyINR(c.expectedSalary) + " (Monthly)" : "—"} />
-            <InfoChip Icon={Briefcase}   tone="slate"   label="Current Company"
-              value={derivedCurrentCompany ?? "—"} />
-          </div>
+          <DetailsEditor c={c} derivedCurrentCompany={derivedCurrentCompany} locationLabel={locationLabel} />
         </Card>
 
         {/* Experience entries — only render when the candidate filled
@@ -1231,6 +1219,152 @@ function Card({
         </div>
       )}
       {children}
+    </div>
+  );
+}
+
+// Inline-editable version of the info-chip card. View mode renders the
+// six read-only chips exactly as before + an "Edit details" button; edit
+// mode swaps to a labelled input grid and PATCHes { action:"updateDetails" }.
+// Mirrors the Skills / Education editors' state + save + mutate story.
+function DetailsEditor({
+  c, derivedCurrentCompany, locationLabel,
+}: {
+  c: Candidate;
+  derivedCurrentCompany: string | null;
+  locationLabel: string;
+}) {
+  const blank = () => ({
+    availableToJoinDays: c.availableToJoinDays ?? "",
+    experienceYears:     c.experienceYears ?? "",
+    experienceMonths:    c.experienceMonths ?? "",
+    currentLocation:     c.currentLocation ?? c.location ?? c.city ?? c.preferredLocation ?? "",
+    currentSalary:       c.currentSalary ?? "",
+    expectedSalary:      c.expectedSalary ?? "",
+    currentCompany:      c.currentCompany ?? "",
+  });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft]     = useState(blank);
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState<string | null>(null);
+  // Re-seed the draft from the candidate whenever it changes and we're
+  // not mid-edit (e.g. after a save mutate refresh, or switching cards).
+  useEffect(() => { if (!editing) setDraft(blank());
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [
+    c.id, c.availableToJoinDays, c.experienceYears, c.experienceMonths,
+    c.currentLocation, c.location, c.city, c.preferredLocation,
+    c.currentSalary, c.expectedSalary, c.currentCompany,
+  ]);
+
+  const set = (k: keyof ReturnType<typeof blank>, v: string) => setDraft((d) => ({ ...d, [k]: v }));
+  const cancel = () => { setDraft(blank()); setEditing(false); setError(null); };
+  const save = async () => {
+    setSaving(true); setError(null);
+    try {
+      // Empty string → null (clears the field); numbers sent as-is.
+      const num = (v: string | number) => (v === "" || v == null ? null : Number(v));
+      const str = (v: string) => (v.trim() ? v.trim() : null);
+      const res = await fetch(`/api/hr/hiring/candidates/${c.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "updateDetails",
+          availableToJoinDays: num(draft.availableToJoinDays),
+          experienceYears:     num(draft.experienceYears),
+          experienceMonths:    num(draft.experienceMonths),
+          currentSalary:       num(draft.currentSalary),
+          expectedSalary:      num(draft.expectedSalary),
+          currentCompany:      str(String(draft.currentCompany)),
+          currentLocation:     str(String(draft.currentLocation)),
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || `Save failed (${res.status})`);
+      }
+      setEditing(false);
+      globalMutate(`/api/hr/hiring/candidates/${c.id}`);
+    } catch (e: any) {
+      setError(e?.message || "Save failed");
+    } finally { setSaving(false); }
+  };
+
+  if (!editing) {
+    return (
+      <>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5">
+          <InfoChip Icon={Calendar}    tone="amber"   label="Available To Join (in days)"
+            value={c.availableToJoinDays != null ? `${c.availableToJoinDays} days` : "—"} />
+          <InfoChip Icon={Briefcase}   tone="slate"   label="Experience"
+            value={fmtExperience(c.experienceYears, c.experienceMonths)} />
+          <InfoChip Icon={MapPin}      tone="orange"  label="Location"
+            value={locationLabel} />
+          <InfoChip Icon={IndianRupee} tone="emerald" label="Current Salary"
+            value={c.currentSalary != null ? fmtMoneyINR(c.currentSalary) + " (Monthly)" : "—"} />
+          <InfoChip Icon={IndianRupee} tone="emerald" label="Expected Salary"
+            value={c.expectedSalary != null ? fmtMoneyINR(c.expectedSalary) + " (Monthly)" : "—"} />
+          <InfoChip Icon={Briefcase}   tone="slate"   label="Current Company"
+            value={derivedCurrentCompany ?? "—"} />
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-slate-200 hover:border-slate-300 text-[11.5px] font-semibold text-slate-700"
+          >Edit details</button>
+        </div>
+      </>
+    );
+  }
+
+  const fieldCls = "mt-1 w-full h-9 px-2.5 rounded-lg border border-slate-200 text-[13px] bg-white text-slate-800 focus:outline-none focus:border-[#3b82f6] focus:ring-2 focus:ring-[#3b82f6]/15";
+  const labelCls = "text-[11px] font-semibold text-slate-500";
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-3">
+        <label className="block">
+          <span className={labelCls}>Available To Join (days)</span>
+          <input type="number" min={0} inputMode="numeric" className={fieldCls}
+            value={draft.availableToJoinDays} onChange={(e) => set("availableToJoinDays", e.target.value)} placeholder="e.g. 30" />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Experience</span>
+          <div className="mt-1 flex gap-2">
+            <input type="number" min={0} max={80} inputMode="numeric" className={fieldCls.replace("mt-1 ", "")}
+              value={draft.experienceYears} onChange={(e) => set("experienceYears", e.target.value)} placeholder="Years" />
+            <input type="number" min={0} max={11} inputMode="numeric" className={fieldCls.replace("mt-1 ", "")}
+              value={draft.experienceMonths} onChange={(e) => set("experienceMonths", e.target.value)} placeholder="Months" />
+          </div>
+        </label>
+        <label className="block">
+          <span className={labelCls}>Location</span>
+          <input type="text" className={fieldCls}
+            value={draft.currentLocation} onChange={(e) => set("currentLocation", e.target.value)} placeholder="City" />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Current Salary (Monthly ₹)</span>
+          <input type="number" min={0} inputMode="numeric" className={fieldCls}
+            value={draft.currentSalary} onChange={(e) => set("currentSalary", e.target.value)} placeholder="e.g. 40000" />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Expected Salary (Monthly ₹)</span>
+          <input type="number" min={0} inputMode="numeric" className={fieldCls}
+            value={draft.expectedSalary} onChange={(e) => set("expectedSalary", e.target.value)} placeholder="e.g. 55000" />
+        </label>
+        <label className="block">
+          <span className={labelCls}>Current Company</span>
+          <input type="text" className={fieldCls}
+            value={draft.currentCompany} onChange={(e) => set("currentCompany", e.target.value)} placeholder="Company name" />
+        </label>
+      </div>
+      {error && <p className="text-[12px] text-red-500">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={cancel} disabled={saving}
+          className="h-8 px-3 rounded-md border border-slate-200 text-[12px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Cancel</button>
+        <button type="button" onClick={save} disabled={saving}
+          className="h-8 px-3 rounded-md bg-[#3b82f6] text-white text-[12px] font-semibold hover:bg-[#2f6fe0] disabled:opacity-60">{saving ? "Saving…" : "Save"}</button>
+      </div>
     </div>
   );
 }
