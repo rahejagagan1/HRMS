@@ -7,6 +7,8 @@ import {
   hasProtectedRole,
   savePermissions,
 } from "@/lib/permissions/resolve";
+import { getPermissionsForUserId } from "@/lib/permissions/resolve-permissions";
+import { normaliseBrandParam } from "@/lib/hr/brand-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -45,12 +47,18 @@ export async function GET(
     const actorId = await resolveUserId(session);
     const { seeded } = await seedDefaultPermissionsIfMissing(targetId, actorId);
 
-    const [target, permissions] = await Promise.all([
+    // ?brand= (nb-media / yt-labs) resolves that brand's effective switches;
+    // omitted → the generic all-brands view. Only meaningful for targets
+    // holding VIEW_ALL_BRANDS — the UI shows brand pills for them.
+    const brand = normaliseBrandParam(_req.nextUrl.searchParams.get("brand"));
+
+    const [target, permissions, targetPerms] = await Promise.all([
       prisma.user.findUnique({
         where: { id: targetId },
         select: { id: true, name: true, email: true, profilePictureUrl: true, orgLevel: true, role: true },
       }),
-      tabPermissionsForUser(targetId),
+      tabPermissionsForUser(targetId, brand),
+      getPermissionsForUserId(targetId),
     ]);
 
     if (!target) {
@@ -71,6 +79,10 @@ export async function GET(
       protected: hasProtectedRole({ ...target, isDeveloper: targetIsDeveloper }),
       actorIsDeveloper,
       permissions,
+      // True when the target can see multiple brands (VIEW_ALL_BRANDS) —
+      // the UI shows per-brand pills so their switches can differ per brand.
+      targetAllBrands: targetPerms.includes("VIEW_ALL_BRANDS"),
+      brand: brand ?? "",
       wasNew: seeded,
     });
   } catch (e) {
@@ -104,6 +116,10 @@ export async function PUT(
     const actorId = await resolveUserId(session);
     const body = await req.json();
     const incoming: Record<string, boolean> = body?.permissions ?? {};
+    // Optional brand scope for the switches being saved: "" (default) =
+    // generic all-brands rows; "NB Media"/"YT Labs" = that brand's
+    // override rows (used for See-all-brands users).
+    const brand = normaliseBrandParam(body?.brand) ?? "";
 
     const target = await prisma.user.findUnique({
       where: { id: targetId },
@@ -134,8 +150,8 @@ export async function PUT(
 
     // Uses raw SQL internally so it's resilient to the typed Prisma
     // client not yet knowing about the UserTabPermission model.
-    await savePermissions(targetId, incoming, actorId ?? null);
-    const permissions = await tabPermissionsForUser(targetId);
+    await savePermissions(targetId, incoming, actorId ?? null, brand);
+    const permissions = await tabPermissionsForUser(targetId, brand || null);
     return NextResponse.json({
       permissions,
       // Surface "protected" honestly (so the UI shows the lock note for

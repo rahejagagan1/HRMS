@@ -22,6 +22,9 @@ type DetailResponse = {
   /// they're the ultimate power-users.
   actorIsDeveloper?: boolean;
   permissions: Record<TabKey, boolean>;
+  /// True when the target holds VIEW_ALL_BRANDS — their switches can be
+  /// set per brand, so the UI shows All brands / NB Media / YT Labs pills.
+  targetAllBrands?: boolean;
   wasNew: boolean;
 };
 
@@ -135,11 +138,19 @@ export default function PermissionsPage() {
 
 // ─────────────────────────────────────────────────────────────────────
 function UserDetail({ userId }: { userId: number }) {
-  const key = `/api/hr/admin/tab-permissions/${userId}`;
+  // Brand scope for the switches being viewed/edited (2026-07-24):
+  // "" = the generic all-brands switches (default, same as before);
+  // "NB Media"/"YT Labs" = that brand's overrides. Pills appear only for
+  // users who hold VIEW_ALL_BRANDS — everyone else has just one brand.
+  const [brandScope, setBrandScope] = useState<"" | "NB Media" | "YT Labs">("");
+  const key = `/api/hr/admin/tab-permissions/${userId}${brandScope ? `?brand=${encodeURIComponent(brandScope)}` : ""}`;
   const { data } = useSWR<DetailResponse>(key, fetcher);
   const [draft, setDraft] = useState<Record<TabKey, boolean>>({} as Record<TabKey, boolean>);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Selecting another user resets the pill back to the generic view.
+  useEffect(() => { setBrandScope(""); }, [userId]);
 
   useEffect(() => {
     if (data?.permissions) setDraft(data.permissions);
@@ -155,10 +166,10 @@ function UserDetail({ userId }: { userId: number }) {
   const save = async () => {
     setSaving(true); setSaved(false);
     try {
-      await fetch(key, {
+      await fetch(`/api/hr/admin/tab-permissions/${userId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ permissions: draft }),
+        body: JSON.stringify({ permissions: draft, brand: brandScope }),
       });
       await mutate(key);
       await mutate("/api/hr/admin/tab-permissions");
@@ -226,6 +237,35 @@ function UserDetail({ userId }: { userId: number }) {
             and can't be restricted — this is a safety net so admins can't accidentally lock themselves
             (or the CEO) out of the app.
           </div>
+        </div>
+      )}
+
+      {/* Per-brand switches — only for users who can see all brands.
+          "All brands" edits their base switches; picking a brand edits
+          overrides that apply only when they open THAT brand's dashboard.
+          Example: a YT Labs HR Manager with See-all-brands keeps full tabs
+          under YT Labs while NB Media shows only the ticked ones. */}
+      {data.targetAllBrands && (
+        <div className="mb-5">
+          <div className="flex items-center gap-1.5">
+            {([
+              { key: "" as const,          label: "All brands (default)" },
+              { key: "NB Media" as const,  label: "NB Media" },
+              { key: "YT Labs" as const,   label: "YT Labs" },
+            ]).map(({ key: k, label }) => (
+              <button key={k || "all"} type="button" onClick={() => setBrandScope(k)}
+                className={`h-8 px-3.5 rounded-full text-[12px] font-semibold border transition-colors ${
+                  brandScope === k
+                    ? "border-[#008CFF] bg-[#008CFF]/10 text-[#008CFF]"
+                    : "border-slate-200 text-slate-600 hover:border-[#008CFF]/40"
+                }`}>{label}</button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11.5px] text-slate-500">
+            This user can see all brands. Pick a brand to set what they see in <em>that</em> brand&apos;s
+            HR Dashboard — brand settings win over the default. Leave a tab untouched on a brand and it
+            follows the &quot;All brands&quot; setting.
+          </p>
         </div>
       )}
 

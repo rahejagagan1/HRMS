@@ -1721,6 +1721,12 @@ model UserTabPermission {
   userId    Int
   tabKey    String // matches TAB_KEYS in src/lib/permissions/tabs.ts
   enabled   Boolean
+  /// Brand scope of this switch (2026-07-24): "" = applies to every brand
+  /// (default — all legacy rows), or "NB Media" / "YT Labs" for a
+  /// brand-specific override. Brand rows win over the "" row when the
+  /// dashboard is opened for that brand. Only shown/editable in the
+  /// Permissions UI for users who hold VIEW_ALL_BRANDS.
+  brand     String   @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   updatedBy Int? // who last flipped the toggle
@@ -1728,7 +1734,7 @@ model UserTabPermission {
   user    User  @relation("UserTabPermsOwner", fields: [userId], references: [id], onDelete: Cascade)
   updater User? @relation("UserTabPermsUpdater", fields: [updatedBy], references: [id])
 
-  @@unique([userId, tabKey])
+  @@unique([userId, tabKey, brand])
   @@index([userId])
 }
 
