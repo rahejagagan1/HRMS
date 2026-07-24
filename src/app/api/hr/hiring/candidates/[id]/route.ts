@@ -499,6 +499,61 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ ok: true });
     }
 
+    if (action === "updateDetails") {
+      // HR-side inline edit of the profile "info chips": availability,
+      // experience (years + months), current company, current location,
+      // and current / expected salary. Each field is written only when
+      // present in the body; "" / null clears it. Numbers validated
+      // non-negative and within sane bounds. Mirrors updateProfile.
+      const set: string[] = [];
+      const args: any[] = [];
+      let badField: string | null = null;
+      const pushNum = (key: string, col: string, max: number, float: boolean) => {
+        if (badField || !(key in (body ?? {}))) return;
+        const v = body[key];
+        if (v === null || v === undefined || v === "") {
+          args.push(null); set.push(`"${col}" = $${args.length}`); return;
+        }
+        const n = float ? Number(v) : parseInt(String(v), 10);
+        if (!Number.isFinite(n) || n < 0 || n > max) { badField = col; return; }
+        args.push(n); set.push(`"${col}" = $${args.length}`);
+      };
+      const pushStr = (key: string, col: string, max = 200) => {
+        if (badField || !(key in (body ?? {}))) return;
+        const v = body[key] != null ? String(body[key]).trim().slice(0, max) : "";
+        args.push(v || null); set.push(`"${col}" = $${args.length}`);
+      };
+
+      pushNum("availableToJoinDays", "availableToJoinDays", 3650, false);
+      pushNum("experienceYears",     "experienceYears",       80, false);
+      pushNum("experienceMonths",    "experienceMonths",      11, false);
+      pushNum("currentSalary",       "currentSalary",       1e12, true);
+      pushNum("expectedSalary",      "expectedSalary",      1e12, true);
+      pushStr("currentCompany",      "currentCompany");
+      pushStr("currentLocation",     "currentLocation");
+
+      if (badField) {
+        return NextResponse.json({ error: `Invalid value for ${badField}` }, { status: 400 });
+      }
+      if (set.length === 0) {
+        return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+      }
+      args.push(id);
+      await prisma.$executeRawUnsafe(
+        `UPDATE "JobApplication" SET ${set.join(", ")}, "updatedAt" = NOW()
+          WHERE "id" = $${args.length}`,
+        ...args,
+      );
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "CandidateActivity" ("applicationId", "kind", "summary", "meta", "actorId")
+         VALUES ($1, 'profile_edit', $2, $3::jsonb, $4)`,
+        id, "Profile details edited",
+        JSON.stringify({ fields: set.map((s) => s.split('"')[1]) }),
+        actorId,
+      );
+      return NextResponse.json({ ok: true });
+    }
+
     if (action === "updateSkills") {
       // HR-side inline edit of the candidate's skills tags. Use
       // case: resume parser couldn't extract skills (multi-column

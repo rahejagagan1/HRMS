@@ -121,11 +121,14 @@ export async function POST(req: NextRequest) {
       : null;
 
     const inserted = await prisma.$queryRawUnsafe<any[]>(
+      // `updatedAt` (@updatedAt) has no DB default and isn't auto-filled on a
+      // raw INSERT — set it (and createdAt, defensively) to avoid a NOT-NULL
+      // violation (Postgres 23502). Mirrors the manual-add + public apply routes.
       `INSERT INTO "JobApplication"
          ("jobOpeningId", "fullName", "email", "phone", "source",
           "resumeFileName", "currentStageId", "enteredStageAt", "status",
-          "referredById", "hrNotes")
-       VALUES ($1, $2, $3, $4, 'referral', $5, $6, NOW(), 'new', $7, $8)
+          "referredById", "hrNotes", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, 'referral', $5, $6, NOW(), 'new', $7, $8, NOW(), NOW())
        RETURNING id`,
       jobOpeningId, fullName, email, phone, resumeName, currentStageId, me, noteForHrNotes,
     );

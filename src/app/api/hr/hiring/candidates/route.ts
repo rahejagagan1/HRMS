@@ -298,10 +298,16 @@ export async function POST(req: NextRequest) {
     const currentStageId = sourcedStage?.id ?? null;
 
     const inserted = await prisma.$queryRawUnsafe<any[]>(
+      // `updatedAt` is `@updatedAt` in the schema — Prisma only auto-fills it
+      // through the ORM, NOT on a raw INSERT, and the column has no DB-level
+      // default. Set it (and createdAt, defensively — the live DB has drifted
+      // via past `db push`) explicitly so the raw insert can't hit a NOT-NULL
+      // violation (Postgres 23502).
       `INSERT INTO "JobApplication"
          ("jobOpeningId", "fullName", "email", "phone", "source",
-          "resumeFileName", "currentStageId", "enteredStageAt", "status")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'new')
+          "resumeFileName", "currentStageId", "enteredStageAt", "status",
+          "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'new', NOW(), NOW())
        RETURNING id`,
       jobOpeningId, fullName, email, phone, source, resumeName, currentStageId,
     );
