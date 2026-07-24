@@ -114,12 +114,35 @@ export default function HRAdminPage() {
   const isAdmin = isHRAdmin(user);
   const isFullAdmin = isFullHRAdmin(user);
 
+  // ── Brand scope (NB Media vs YT Labs sub-dashboards) ───────────────
+  // The sidebar exposes the HR Dashboard as a hover-flyout with two
+  // brand entries that route here as ?brand=nb-media or ?brand=yt-labs
+  // (and ?brand=all for super-admins). When set, that value is passed
+  // down as `initialBrand` to each panel so they open scoped to that
+  // brand. Absent param → fallback to the in-panel auto-detect (viewer
+  // brand, or "all" for super-admin) — unchanged from before.
+  // (Hoisted above the tab-permissions fetch so the brand can scope it.)
+  const searchParams = useSearchParams();
+  const brandParam   = searchParams.get("brand");
+  const initialBrand: CompanyBrand | null = useMemo(
+    () => brandFromSlug(brandParam),
+    [brandParam],
+  );
+  const brandLabel = initialBrand === "NB Media" ? "NB Media"
+                   : initialBrand === "YT Labs"  ? "YT Labs"
+                   : initialBrand === "all"      ? "All brands"
+                   : null;
+
   // Pull the viewer's effective tab permissions so the rail links honour
   // explicit grants/revokes from the Permissions UI (not just role-based
   // defaults). Lets an admin grant `hr_hiring: true` to a Coordinator
   // and have them see the Hiring rail link without making them an admin.
+  // Brand-aware (2026-07-24): when the dashboard is opened for a specific
+  // brand (?brand= from the sidebar flyout), resolve THAT brand's tab
+  // switches — a See-all-brands user can have full tabs in their own brand
+  // and a trimmed list in the other.
   const { data: perms } = useSWR<{ permissions: Record<string, boolean> }>(
-    "/api/hr/me/tab-permissions",
+    `/api/hr/me/tab-permissions${initialBrand && initialBrand !== "all" ? `?brand=${encodeURIComponent(initialBrand)}` : ""}`,
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 30_000 }
   );
@@ -174,24 +197,6 @@ export default function HRAdminPage() {
   // for hr_manager-only viewers; we still want the URL value
   // honoured if it's a valid key for the current viewer.
   const [tab, setTab] = useUrlTab<string>("tab", "attendance-dashboard");
-
-  // ── Brand scope (NB Media vs YT Labs sub-dashboards) ───────────────
-  // The sidebar exposes the HR Dashboard as a hover-flyout with two
-  // brand entries that route here as ?brand=nb-media or ?brand=yt-labs
-  // (and ?brand=all for super-admins). When set, that value is passed
-  // down as `initialBrand` to each panel so they open scoped to that
-  // brand. Absent param → fallback to the in-panel auto-detect (viewer
-  // brand, or "all" for super-admin) — unchanged from before.
-  const searchParams = useSearchParams();
-  const brandParam   = searchParams.get("brand");
-  const initialBrand: CompanyBrand | null = useMemo(
-    () => brandFromSlug(brandParam),
-    [brandParam],
-  );
-  const brandLabel = initialBrand === "NB Media" ? "NB Media"
-                   : initialBrand === "YT Labs"  ? "YT Labs"
-                   : initialBrand === "all"      ? "All brands"
-                   : null;
 
   // If the current tab isn't visible (because tier-curation OR a
   // per-user revoke removed it), snap to the first visible tab. We

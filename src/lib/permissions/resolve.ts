@@ -24,10 +24,13 @@ export function hasProtectedRole(user: {
 }
 
 // ─── Internal: raw-SQL helpers so callers work before `prisma generate` ──
-async function rawGetRows(userId: number): Promise<{ tabKey: string; enabled: boolean }[]> {
+// Rows carry a `brand` scope (2026-07-24): "" = applies to all brands
+// (every legacy row), "NB Media"/"YT Labs" = brand-specific override that
+// wins over the "" row when a brand context is given.
+async function rawGetRows(userId: number): Promise<{ tabKey: string; enabled: boolean; brand: string }[]> {
   try {
-    return await prisma.$queryRawUnsafe<{ tabKey: string; enabled: boolean }[]>(
-      `SELECT "tabKey", "enabled" FROM "UserTabPermission" WHERE "userId" = $1`,
+    return await prisma.$queryRawUnsafe<{ tabKey: string; enabled: boolean; brand: string }[]>(
+      `SELECT "tabKey", "enabled", COALESCE("brand", '') AS "brand" FROM "UserTabPermission" WHERE "userId" = $1`,
       userId
     );
   } catch {
@@ -45,13 +48,13 @@ async function rawCount(userId: number): Promise<number> {
     return 0;
   }
 }
-async function rawUpsert(userId: number, tabKey: string, enabled: boolean, updatedBy: number | null): Promise<void> {
+async function rawUpsert(userId: number, tabKey: string, enabled: boolean, updatedBy: number | null, brand = ""): Promise<void> {
   await prisma.$executeRawUnsafe(
-    `INSERT INTO "UserTabPermission" ("userId","tabKey","enabled","createdAt","updatedAt","updatedBy")
-     VALUES ($1,$2,$3,NOW(),NOW(),$4)
-     ON CONFLICT ("userId","tabKey")
+    `INSERT INTO "UserTabPermission" ("userId","tabKey","enabled","brand","createdAt","updatedAt","updatedBy")
+     VALUES ($1,$2,$3,$4,NOW(),NOW(),$5)
+     ON CONFLICT ("userId","tabKey","brand")
      DO UPDATE SET "enabled"=EXCLUDED."enabled","updatedAt"=NOW(),"updatedBy"=EXCLUDED."updatedBy"`,
-    userId, tabKey, enabled, updatedBy
+    userId, tabKey, enabled, brand, updatedBy
   );
 }
 
@@ -65,7 +68,7 @@ async function rawUpsert(userId: number, tabKey: string, enabled: boolean, updat
  * still grant the right tabs per the sidebar's access logic. All three
  * are "protected" — the UI won't let an admin flip their toggles.
  */
-export async function tabPermissionsForUser(userId: number): Promise<Record<TabKey, boolean>> {
+export async function tabPermissionsForUser(userId: number, brand?: string | null): Promise<Record<TabKey, boolean>> {
   const [user, rows, perms] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
@@ -102,8 +105,16 @@ export async function tabPermissionsForUser(userId: number): Promise<Record<TabK
   }
 
   // Everyone else: apply explicit per-user overrides from the DB.
+  // Generic rows (brand "") first, then — when a brand context is given —
+  // that brand's specific rows win. So a See-all-brands user can have full
+  // tabs in their own brand's dashboard and a trimmed list in the other.
   for (const r of rows) {
-    if (r.tabKey in out) out[r.tabKey as TabKey] = r.enabled;
+    if (r.brand === "" && r.tabKey in out) out[r.tabKey as TabKey] = r.enabled;
+  }
+  if (brand) {
+    for (const r of rows) {
+      if (r.brand === brand && r.tabKey in out) out[r.tabKey as TabKey] = r.enabled;
+    }
   }
 
   // The actual HR Manager owns HR policy config and always sees Leave
@@ -125,7 +136,8 @@ export async function tabPermissionsForUser(userId: number): Promise<Record<TabK
 export async function canAccessTab(
   userId: number,
   tabKey: TabKey | null,
-  tokenHints: { orgLevel?: string | null; isDeveloper?: boolean | null }
+  tokenHints: { orgLevel?: string | null; isDeveloper?: boolean | null },
+  brand?: string | null
 ): Promise<boolean> {
   if (tabKey === null) return true;
   if (hasProtectedRole(tokenHints)) return true;
@@ -139,7 +151,10 @@ export async function canAccessTab(
   // Forced HR-policy tabs win over stale explicit rows (same rule as
   // tabPermissionsForUser) — designation-driven via MANAGE_LEAVE_POLICY.
   if (HR_MANAGER_FORCED_TABS.includes(tabKey) && perms.includes("MANAGE_LEAVE_POLICY")) return true;
-  const r = rows.find((x) => x.tabKey === tabKey);
+  // Brand-specific row wins over the generic ("") row when brand is given.
+  const brandRow = brand ? rows.find((x) => x.tabKey === tabKey && x.brand === brand) : undefined;
+  if (brandRow) return brandRow.enabled;
+  const r = rows.find((x) => x.tabKey === tabKey && x.brand === "");
   if (r) return r.enabled;
   return defaultTabPermissions(tokenHints.orgLevel, perms)[tabKey];
 }
@@ -184,12 +199,13 @@ export async function isUserNew(userId: number): Promise<boolean> {
 export async function savePermissions(
   userId: number,
   perms: Record<string, boolean>,
-  updatedBy: number | null
+  updatedBy: number | null,
+  brand = ""
 ): Promise<void> {
   const valid = new Set<string>(TAB_CATALOG.map((t) => t.key));
   await Promise.all(
     Object.entries(perms)
       .filter(([k]) => valid.has(k))
-      .map(([k, v]) => rawUpsert(userId, k, !!v, updatedBy))
+      .map(([k, v]) => rawUpsert(userId, k, !!v, updatedBy, brand))
   );
 }
