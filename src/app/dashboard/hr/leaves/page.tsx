@@ -32,6 +32,8 @@ export default function LeavesPage() {
   const years = [nowYear, nowYear - 1, nowYear - 2];
   const [showApply, setShowApply] = useState(false);
   const [showCompOff, setShowCompOff] = useState(false);
+  // Edit an existing PENDING leave — opens the same form pre-filled.
+  const [editApp, setEditApp] = useState<any | null>(null);
 
   const { data: balances = [] } = useSWR(`/api/hr/leaves/balance?year=${year}`, fetcher);
   const { data: applications = [] } = useSWR(`/api/hr/leaves?view=my`, fetcher);
@@ -86,6 +88,7 @@ export default function LeavesPage() {
           compOffHistoryHref="/dashboard/hr/leaves/comp-off-history"
           policyHref="/dashboard/hr/admin"
           onCancel={handleCancel}
+          onEdit={(a) => setEditApp(a)}
         />
       </div>
 
@@ -95,6 +98,22 @@ export default function LeavesPage() {
           title="Request Leave"
           leaveTypes={applyable}
           onClose={() => setShowApply(false)}
+          onSaved={refreshLeaves}
+        />
+      )}
+      {editApp && (
+        <LeaveRequestForm
+          kind="leave"
+          title="Edit Leave"
+          leaveTypes={applyable}
+          editId={editApp.id}
+          initial={{
+            fromDate: String(editApp.fromDate).slice(0, 10),
+            toDate:   String(editApp.toDate).slice(0, 10),
+            reason:   editApp.reason ?? "",
+            leaveTypeId: editApp.leaveTypeId ?? editApp.leaveType?.id,
+          }}
+          onClose={() => setEditApp(null)}
           onSaved={refreshLeaves}
         />
       )}

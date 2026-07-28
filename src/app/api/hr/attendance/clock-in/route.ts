@@ -11,6 +11,7 @@ import { isAttendanceEnabled } from "@/lib/hr/notification-policy";
 import { evaluateOfficeGeofence } from "@/lib/office-geofence";
 import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { writeAuditLog } from "@/lib/audit-log";
+import { SHORT_LEAVE_MINUTES } from "@/lib/hr/short-leave";
 
 // Real GPS coordinates required so the attendance log always has a verifiable
 // physical location. Address is optional and capped to keep payloads small.
@@ -157,13 +158,26 @@ export async function POST(req: NextRequest) {
     // are checked against the YT Labs office coords instead of the NB
     // Media default, so they don't get flagged as "off-site" while
     // sitting at the YT Labs building.
-    const [userShift, profile, approvedWfh, halfLeave] = await Promise.all([
+    const [userShift, profile, approvedWfh, halfLeave, morningShortLeave] = await Promise.all([
       prisma.userShift.findUnique({ where: { userId }, include: { shift: true } }),
       prisma.employeeProfile.findUnique({ where: { userId }, select: { workLocation: true, businessUnit: true } }),
       prisma.wFHRequest.findFirst({ where: { userId, date: today, status: "approved" }, select: { id: true, reason: true } }),
       prisma.leaveApplication.findFirst({
         where: { userId, fromDate: { lte: today }, toDate: { gte: today }, status: { in: ["approved", "partially_approved", "pending"] } },
         select: { reason: true },
+      }),
+      // A MORNING short leave excuses the first 2h — the late cutoff shifts by
+      // 2h (+ the shift's own grace) so an on-time-after-short-leave arrival
+      // isn't flagged late. Matched by marker; evening short leave doesn't
+      // affect arrival. Dedicated query so a co-existing evening short leave
+      // (opposite slot, same day) can't hide the morning one via findFirst.
+      prisma.leaveApplication.findFirst({
+        where: {
+          userId, fromDate: { lte: today }, toDate: { gte: today },
+          status: { in: ["approved", "partially_approved", "pending"] },
+          reason: { contains: "Short Leave - Morning", mode: "insensitive" },
+        },
+        select: { id: true },
       }),
     ]);
 
@@ -193,19 +207,33 @@ export async function POST(req: NextRequest) {
     let status = "present";
     const nowMin = istMinutesOfDay(now);
     if (userShift?.shift) {
-      const [sh, sm] = userShift.shift.startTime.split(":").map(Number);
-      const [eh, em] = userShift.shift.endTime.split(":").map(Number);
-      const grace = Number.isFinite(userShift.shift.breakMinutes) ? userShift.shift.breakMinutes : 15;
-      // Half-day grace: dedicated per-shift window for second-half arrivals
-      // (first-half leave/WFH). NULL → inherit the main grace. Read via `as
-      // any` so a stale generated client (column added 2026-07-21) still runs.
-      const hdRaw = (userShift.shift as any).halfDayGraceMinutes;
-      const halfGrace = Number.isFinite(hdRaw) ? Number(hdRaw) : grace;
+      // Saturday-specific hours/grace (2026-07-24): when today is a Saturday
+      // and the shift defines satStartTime/satEndTime, the whole late logic
+      // runs on THOSE times (own grace optional; falls back to the main
+      // grace). Read via `as any` — stale generated client tolerance.
+      const isSaturday = today.getUTCDay() === 6;
+      const satStart = (userShift.shift as any).satStartTime as string | null | undefined;
+      const satEnd   = (userShift.shift as any).satEndTime as string | null | undefined;
+      const useSat   = isSaturday && !!satStart && !!satEnd;
+      const [sh, sm] = (useSat ? satStart! : userShift.shift.startTime).split(":").map(Number);
+      const [eh, em] = (useSat ? satEnd!   : userShift.shift.endTime).split(":").map(Number);
+      const mainGrace = Number.isFinite(userShift.shift.breakMinutes) ? userShift.shift.breakMinutes : 15;
+      const satGraceRaw = (userShift.shift as any).satGraceMinutes;
+      const grace = useSat && Number.isFinite(satGraceRaw) ? Number(satGraceRaw) : mainGrace;
       const startMin = sh * 60 + sm;
       const midMin   = Math.round((startMin + (eh * 60 + em)) / 2);
-      // First-half off → expected from the mid-point (+ half-day grace);
-      // otherwise from shift start (+ main grace).
-      const lateCutoffMin = isFirstHalfOff ? midMin + halfGrace : startMin + grace;
+      // Cutoff precedence — the ONE grace period (Shift.breakMinutes) applies
+      // to every arrival kind (the separate half-day grace was merged back
+      // into it, 2026-07-24):
+      //   • First-half off (half-day leave/WFH) → mid-point + grace.
+      //   • Morning short leave → shift start + 2h + grace
+      //     (NB 10:00+2h+15m → 12:15; YT 11:00+2h+1m → 13:01).
+      //   • Otherwise → shift start + grace.
+      const lateCutoffMin = isFirstHalfOff
+        ? midMin + grace
+        : morningShortLeave
+          ? startMin + SHORT_LEAVE_MINUTES + grace
+          : startMin + grace;
       if (nowMin > lateCutoffMin) status = "late";
     } else if (nowMin >= (isFirstHalfOff ? 14 * 60 : 10 * 60)) {
       status = "late"; // no shift assigned → legacy cutoff (2 PM if first-half off, else 10 AM)

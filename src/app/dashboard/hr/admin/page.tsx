@@ -71,6 +71,22 @@ const hmToMin = (hm: string): number | null => {
 const minToHm = (min: number): string =>
   `${String(Math.floor(min / 60) % 24).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 
+// Next `count` Saturdays from today as "YYYY-MM-DD" — the pick-list shown
+// by the "Pick dates" Saturday policy in the shift form.
+const upcomingSaturdays = (count: number): string[] => {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  d.setUTCDate(d.getUTCDate() + ((6 - d.getUTCDay() + 7) % 7));
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`);
+    d.setUTCDate(d.getUTCDate() + 7);
+  }
+  return out;
+};
+const fmtSatChip = (iso: string): string =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" });
+
 export default function HRAdminPage() {
   const { data: session } = useSession();
   const user = session?.user as any;
@@ -308,7 +324,7 @@ export default function HRAdminPage() {
   // Shift form
   const [showShiftForm, setShowShiftForm] = useState(false);
   const [editShift, setEditShift] = useState<any>(null);
-  const [shiftForm, setShiftForm] = useState({ name: "", startTime: "09:00", endTime: "18:00", gracePeriodMinutes: "15", halfDayGraceMinutes: "", workingDays: [1,2,3,4,5], saturdayPolicy: "all", saturdayWeeks: [] as number[] });
+  const [shiftForm, setShiftForm] = useState({ name: "", startTime: "09:00", endTime: "18:00", gracePeriodMinutes: "15", workingDays: [1,2,3,4,5], saturdayPolicy: "all", saturdayWeeks: [] as number[], saturdayDates: [] as string[], satDifferent: false, satStartTime: "10:00", satEndTime: "15:00", satGraceMinutes: "" });
   // Apply-shift-to-employees modal state.
   const [applyShift, setApplyShift] = useState<any>(null);
   const [applyScope, setApplyScope] = useState<"all" | "nb_media" | "yt_labs" | "specific">("all");
@@ -365,11 +381,14 @@ export default function HRAdminPage() {
       startTime: s.startTime,
       endTime: s.endTime,
       gracePeriodMinutes: String(breakRaw),
-      // Empty string = "inherit the main grace" (stored NULL).
-      halfDayGraceMinutes: s.halfDayGraceMinutes == null ? "" : String(s.halfDayGraceMinutes),
       workingDays,
       saturdayPolicy: s.saturdayPolicy ?? "all",
       saturdayWeeks: Array.isArray(s.saturdayWeeks) ? s.saturdayWeeks : [],
+      saturdayDates: Array.isArray(s.saturdayDates) ? s.saturdayDates : [],
+      satDifferent: !!(s.satStartTime && s.satEndTime),
+      satStartTime: s.satStartTime || "10:00",
+      satEndTime: s.satEndTime || "15:00",
+      satGraceMinutes: s.satGraceMinutes == null ? "" : String(s.satGraceMinutes),
     });
     setShowShiftForm(true);
   };
@@ -399,11 +418,17 @@ export default function HRAdminPage() {
       startTime: shiftForm.startTime,
       endTime: shiftForm.endTime,
       breakMinutes: shiftForm.gracePeriodMinutes,
-      // "" → NULL (inherit breakMinutes) server-side.
-      halfDayGraceMinutes: shiftForm.halfDayGraceMinutes,
+      // Merged 2026-07-24: the ONE grace covers second-half arrivals too —
+      // explicitly clear any stored half-day override.
+      halfDayGraceMinutes: "",
       workDays,
       saturdayPolicy: satSelected ? shiftForm.saturdayPolicy : "all",
       saturdayWeeks: satSelected && shiftForm.saturdayPolicy === "weeks" ? shiftForm.saturdayWeeks : [],
+      saturdayDates: satSelected && shiftForm.saturdayPolicy === "dates" ? shiftForm.saturdayDates : [],
+      // Saturday-specific hours — "" clears back to "same as weekdays".
+      satStartTime: satSelected && shiftForm.satDifferent ? shiftForm.satStartTime : "",
+      satEndTime:   satSelected && shiftForm.satDifferent ? shiftForm.satEndTime   : "",
+      satGraceMinutes: satSelected && shiftForm.satDifferent ? shiftForm.satGraceMinutes : "",
       // Brand stamp: an all-brands admin creates the shift for the brand
       // tab they're on (NB / YT). Scoped HR can send anything — the server
       // always stamps their OWN brand. On the "All brands" tab this stays
@@ -861,7 +886,7 @@ export default function HRAdminPage() {
             <>
               <div className="flex items-center justify-between">
                 <h2 className="text-[14px] font-bold text-slate-800 dark:text-white">Shift Templates</h2>
-                <button onClick={() => { setEditShift(null); setShiftForm({ name:"",startTime:"09:00",endTime:"18:00",gracePeriodMinutes:"15",halfDayGraceMinutes:"",workingDays:[1,2,3,4,5],saturdayPolicy:"all",saturdayWeeks:[] }); setShowShiftForm(true); }}
+                <button onClick={() => { setEditShift(null); setShiftForm({ name:"",startTime:"09:00",endTime:"18:00",gracePeriodMinutes:"15",workingDays:[1,2,3,4,5],saturdayPolicy:"all",saturdayWeeks:[],saturdayDates:[],satDifferent:false,satStartTime:"10:00",satEndTime:"15:00",satGraceMinutes:"" }); setShowShiftForm(true); }}
                   className="flex items-center gap-1.5 h-8 px-4 bg-[#008CFF] hover:bg-[#0077dd] text-white rounded-lg text-[12px] font-semibold">
                   <Plus className="w-3.5 h-3.5" />Add Shift
                 </button>
@@ -881,7 +906,7 @@ export default function HRAdminPage() {
                             if (st === null || en === null || en <= st) return null;
                             return <>{" · "}2nd half: {minToHm(Math.round((st + en) / 2))}</>;
                           })()}
-                          {s.halfDayGraceMinutes != null && <>{" · "}½-day grace: {s.halfDayGraceMinutes}min</>}
+                          {s.satStartTime && s.satEndTime && <>{" · "}Sat: {s.satStartTime}–{s.satEndTime}{s.satGraceMinutes != null ? ` (grace ${s.satGraceMinutes}m)` : ""}</>}
                           {" · "}{(Array.isArray(s.workDays) ? s.workDays : [])
                             .map((d: unknown) => typeof d === "number" ? DAYS_LABEL[d] : String(d))
                             .filter(Boolean)
@@ -1360,7 +1385,7 @@ export default function HRAdminPage() {
       {/* Modal: Shift */}
       {showShiftForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-[#001529] rounded-xl shadow-2xl p-6 w-[440px]">
+          <div className="bg-white dark:bg-[#001529] rounded-xl shadow-2xl p-6 w-[640px] max-w-[94vw] max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[14px] font-bold text-slate-800 dark:text-white">{editShift ? "Edit" : "Add"} Shift</h3>
               <button onClick={() => setShowShiftForm(false)}><X className="w-4 h-4 text-slate-400" /></button>
@@ -1381,35 +1406,26 @@ export default function HRAdminPage() {
                   </div>
                 ))}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Grace Period (minutes)</label>
-                  <input type="number" min={0} value={shiftForm.gracePeriodMinutes} onChange={e => setShiftForm(f => ({ ...f, gracePeriodMinutes: e.target.value }))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-[13px] text-slate-800 dark:text-white" />
-                </div>
-                <div>
-                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Half-Day Grace (minutes)</label>
-                  <input type="number" min={0} value={shiftForm.halfDayGraceMinutes} placeholder="Same as grace"
-                    onChange={e => setShiftForm(f => ({ ...f, halfDayGraceMinutes: e.target.value }))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-[13px] text-slate-800 dark:text-white placeholder:text-slate-400" />
-                </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Grace Period (minutes)</label>
+                <input type="number" min={0} value={shiftForm.gracePeriodMinutes} onChange={e => setShiftForm(f => ({ ...f, gracePeriodMinutes: e.target.value }))}
+                  className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-[13px] text-slate-800 dark:text-white" />
               </div>
 
-              {/* Live half-day boundary preview — mid-point of start/end, plus
-                  the second-half late cutoff derived from the half-day grace
-                  (falling back to the main grace when blank). */}
+              {/* Live half-day boundary preview — mid-point of start/end; the
+                  ONE grace period covers both shift-start and second-half
+                  arrivals (merged 2026-07-24). */}
               {(() => {
                 const s = hmToMin(shiftForm.startTime), e = hmToMin(shiftForm.endTime);
                 if (s === null || e === null || e <= s) return null;
                 const mid = Math.round((s + e) / 2);
                 const mainGrace = Number.parseInt(shiftForm.gracePeriodMinutes, 10);
-                const hdRaw = Number.parseInt(shiftForm.halfDayGraceMinutes, 10);
-                const hdGrace = Number.isFinite(hdRaw) ? hdRaw : (Number.isFinite(mainGrace) ? mainGrace : 0);
+                const grace = Number.isFinite(mainGrace) ? mainGrace : 0;
                 return (
                   <div className="rounded-lg bg-slate-50 dark:bg-white/5 px-3 py-2 text-[11.5px] text-slate-600 dark:text-slate-300">
                     1st half <span className="font-semibold">{shiftForm.startTime}–{minToHm(mid)}</span>
                     {" · "}2nd half <span className="font-semibold">{minToHm(mid)}–{shiftForm.endTime}</span>
-                    {" · "}2nd-half arrivals late after <span className="font-semibold">{minToHm(mid + hdGrace)}</span>
+                    {" · "}2nd-half arrivals late after <span className="font-semibold">{minToHm(mid + grace)}</span>
                   </div>
                 );
               })()}
@@ -1437,12 +1453,13 @@ export default function HRAdminPage() {
                       { key: "alternate", label: "Alternate (1 on / 1 off)",  policy: "alternate", weeks: [] as number[] },
                       { key: "1_3",       label: "1st & 3rd",                 policy: "weeks",     weeks: [1, 3] },
                       { key: "2_4",       label: "2nd & 4th",                 policy: "weeks",     weeks: [2, 4] },
+                      { key: "dates",     label: "Pick dates",                policy: "dates",     weeks: [] as number[] },
                     ] as const).map((opt) => {
                       const active =
-                        opt.policy === "all"       ? shiftForm.saturdayPolicy === "all"
-                        : opt.policy === "alternate" ? shiftForm.saturdayPolicy === "alternate"
-                        : shiftForm.saturdayPolicy === "weeks" &&
-                          JSON.stringify([...shiftForm.saturdayWeeks].sort()) === JSON.stringify([...opt.weeks].sort());
+                        opt.policy === "weeks"
+                          ? shiftForm.saturdayPolicy === "weeks" &&
+                            JSON.stringify([...shiftForm.saturdayWeeks].sort()) === JSON.stringify([...opt.weeks].sort())
+                          : shiftForm.saturdayPolicy === opt.policy;
                       return (
                         <button key={opt.key} type="button"
                           onClick={() => setShiftForm(f => ({ ...f, saturdayPolicy: opt.policy, saturdayWeeks: [...opt.weeks] }))}
@@ -1454,10 +1471,85 @@ export default function HRAdminPage() {
                       );
                     })}
                   </div>
-                  {shiftForm.saturdayPolicy === "alternate" && (
-                    <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-                      Every other Saturday, counted from the date you apply this shift — the apply-week Saturday works, the next is off, then on, and so on.
-                    </p>
+                  {shiftForm.saturdayPolicy === "dates" && (
+                    <div className="mt-2">
+                      {/* Upcoming Saturdays as tick-chips + any previously
+                          saved dates outside that window (kept visible so an
+                          old selection can still be unticked). Blue = works. */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {Array.from(new Set([...upcomingSaturdays(10), ...shiftForm.saturdayDates])).sort().map((iso) => {
+                          const on = shiftForm.saturdayDates.includes(iso);
+                          return (
+                            <button key={iso} type="button"
+                              onClick={() => setShiftForm(f => ({
+                                ...f,
+                                saturdayDates: on ? f.saturdayDates.filter((d) => d !== iso) : [...f.saturdayDates, iso].sort(),
+                              }))}
+                              className={`h-8 px-3 rounded-full text-[11.5px] font-semibold border transition-colors ${
+                                on
+                                  ? "border-[#008CFF] bg-[#008CFF] text-white"
+                                  : "border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"
+                              }`}>{fmtSatChip(iso)}</button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Saturday HOURS — same as weekdays, or a Saturday-specific
+                      shift (own start/end/grace). Required minutes on such
+                      Saturdays derive from these hours. */}
+                  <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2 mt-3 block">Saturday Hours</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {([
+                      { diff: false, label: "Same as weekdays" },
+                      { diff: true,  label: "Different hours" },
+                    ] as const).map((opt) => (
+                      <button key={String(opt.diff)} type="button"
+                        onClick={() => setShiftForm(f => ({ ...f, satDifferent: opt.diff }))}
+                        className={`h-9 rounded-lg text-[12px] font-semibold border transition-colors ${
+                          shiftForm.satDifferent === opt.diff
+                            ? "border-[#008CFF] bg-[#008CFF]/10 text-[#008CFF]"
+                            : "border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:border-[#008CFF]/40"
+                        }`}>{opt.label}</button>
+                    ))}
+                  </div>
+                  {shiftForm.satDifferent && (
+                    <>
+                      <div className="grid grid-cols-3 gap-3 mt-2">
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Sat Start</label>
+                          <input type="time" value={shiftForm.satStartTime} onChange={e => setShiftForm(f => ({ ...f, satStartTime: e.target.value }))}
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-[13px] text-slate-800 dark:text-white" />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Sat End</label>
+                          <input type="time" value={shiftForm.satEndTime} onChange={e => setShiftForm(f => ({ ...f, satEndTime: e.target.value }))}
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-[13px] text-slate-800 dark:text-white" />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">Sat Grace</label>
+                          <input type="number" min={0} value={shiftForm.satGraceMinutes} placeholder="Same as grace"
+                            onChange={e => setShiftForm(f => ({ ...f, satGraceMinutes: e.target.value }))}
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 text-[13px] text-slate-800 dark:text-white placeholder:text-slate-400" />
+                        </div>
+                      </div>
+                      {(() => {
+                        const s = hmToMin(shiftForm.satStartTime), e = hmToMin(shiftForm.satEndTime);
+                        if (s === null || e === null || e <= s) return null;
+                        const len = e - s;
+                        const mainG = Number.parseInt(shiftForm.gracePeriodMinutes, 10);
+                        const satG = Number.parseInt(shiftForm.satGraceMinutes, 10);
+                        const g = Number.isFinite(satG) ? satG : (Number.isFinite(mainG) ? mainG : 0);
+                        return (
+                          <div className="mt-2 rounded-lg bg-slate-50 dark:bg-white/5 px-3 py-2 text-[11.5px] text-slate-600 dark:text-slate-300">
+                            Saturday <span className="font-semibold">{shiftForm.satStartTime}–{shiftForm.satEndTime}</span>
+                            {" · "}<span className="font-semibold">{Math.floor(len / 60)}h {String(len % 60).padStart(2, "0")}m</span> day
+                            {" · "}late after <span className="font-semibold">{minToHm(s + g)}</span>
+                          </div>
+                        );
+                      })()}
+                    </>
                   )}
                 </div>
               )}

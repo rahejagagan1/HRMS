@@ -8,6 +8,11 @@ import { countWorkingDays } from "@/lib/hr/working-days";
 import { checkPastDateAllowed } from "@/lib/hr/leave-date-rules";
 import { sendEmail } from "@/lib/email/sender";
 import { pocAssignmentEmail } from "@/lib/email/templates";
+import {
+  isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS,
+  SHORT_LEAVE_MONTHLY_CAP, type ShortLeaveSlot,
+} from "@/lib/hr/short-leave";
+import { istMonthRange } from "@/lib/ist-date";
 
 // GET /api/hr/leaves — list leave applications
 export async function GET(req: NextRequest) {
@@ -114,6 +119,13 @@ export async function POST(req: NextRequest) {
     }
     const subjectUserId = onBehalf ? targetUserId! : myId;
 
+    // Short leave forces Casual Leave server-side, so the client needn't send
+    // a leaveTypeId for it — only the marker in `reason`. Every other leave
+    // still requires an explicit type.
+    // Short leave now picks its leave type like any other leave (2026-07-25) —
+    // the client always sends a leaveTypeId; short leave just changes the
+    // amount (0.25), single-day shape, monthly cap, and attendance excuse.
+    const wantShortLeave = isShortLeaveReason(reason);
     if (!leaveTypeId || !fromDate || !toDate || !reason)
       return NextResponse.json({ error: "All fields are required" }, { status: 400 });
     const extras = Array.isArray(notifyUserIds) ? notifyUserIds.filter((x: any) => Number.isInteger(x)) : [];
@@ -165,6 +177,28 @@ export async function POST(req: NextRequest) {
         { status: 403 },
       );
     }
+    // ── Short Leave (2026-07-24) ────────────────────────────────────────
+    // A 2-hour leave costing 0.25 CL, tagged in the reason as
+    // "[Short Leave - Morning/Evening]". When detected we FORCE the type to
+    // Casual Leave regardless of what the client sent, and validate the
+    // slot + single-day shape here. The remaining short-leave rules (shift
+    // required, monthly cap, 0.25 amount) are enforced further below where
+    // the shift + balance are already in hand.
+    // Short leave draws from whatever applicable type the employee chose
+    // (leaveType already resolved + validated above). Here we only enforce
+    // its shape: a valid slot and a single day.
+    const shortLeave = wantShortLeave;
+    let shortSlot: ShortLeaveSlot | null = null;
+    if (shortLeave) {
+      shortSlot = shortLeaveSlot(reason);
+      if (!shortSlot) {
+        return NextResponse.json({ error: "Pick a Morning or Evening slot for the short leave." }, { status: 400 });
+      }
+      if (from.toDateString() !== to.toDateString()) {
+        return NextResponse.json({ error: "A short leave is for a single day." }, { status: 400 });
+      }
+    }
+
     // Floater Leave is date-locked to the optional-holiday calendar
     // (2026-07-22): it can ONLY be taken on dates listed with
     // type="optional" (Pongal, Raksha Bandhan, …). The lock is
@@ -221,14 +255,49 @@ export async function POST(req: NextRequest) {
       include: { shift: true },
     });
 
+    // Short leave needs a shift — the excused 2-hour window is computed from
+    // the employee's own shift start/end + grace. No shift → block with the
+    // agreed message so HR knows to assign one.
+    if (shortLeave && !subjectShift?.shift) {
+      return NextResponse.json(
+        { error: "Shift not assigned — please contact the HR department." },
+        { status: 400 },
+      );
+    }
+
+    // Short leave — max SHORT_LEAVE_MONTHLY_CAP per calendar month per person.
+    // Count the subject's live short leaves (pending / partially_approved /
+    // approved) in the requested date's IST month, detected by marker.
+    if (shortLeave) {
+      const { start, end } = istMonthRange(from);
+      const monthRows = await prisma.leaveApplication.findMany({
+        where: {
+          userId: subjectUserId,
+          status: { in: ["pending", "partially_approved", "approved"] },
+          fromDate: { gte: start, lte: end },
+        },
+        select: { reason: true },
+      });
+      const used = monthRows.filter((r) => isShortLeaveReason(r.reason)).length;
+      if (used >= SHORT_LEAVE_MONTHLY_CAP) {
+        const monthLabel = start.toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
+        return NextResponse.json(
+          { error: `Short leave limit reached — ${used} of ${SHORT_LEAVE_MONTHLY_CAP} used for ${monthLabel}.` },
+          { status: 400 },
+        );
+      }
+    }
+
     // Half-day requests carry a marker in the reason field — the apply form
     // adds `[Half Day]`, `[First Half]`, or `[Second Half]` so the API
     // doesn't need a separate column. When present, the request only ever
     // covers a single calendar date and counts as 0.5 days.
     const isHalfDay = /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(reason ?? ""));
-    let totalDays = isHalfDay
-      ? 0.5
-      : await countWorkingDays(from, to, subjectShift?.shift, subjectShift?.effectiveFrom);
+    let totalDays = shortLeave
+      ? SHORT_LEAVE_DAYS
+      : isHalfDay
+        ? 0.5
+        : await countWorkingDays(from, to, subjectShift?.shift, subjectShift?.effectiveFrom);
     if (totalDays === 0) return NextResponse.json({ error: "Selected dates are all non-working days / holidays for this shift" }, { status: 400 });
 
     const year = from.getFullYear();
@@ -275,9 +344,14 @@ export async function POST(req: NextRequest) {
                       - parseFloat(balance.usedDays.toString())
                       - parseFloat(balance.pendingDays.toString());
       if (totalDays > available) {
-        if (onBehalf && useLwpFallback) {
+        // Short leave never falls back to LWP — if CL is below 0.25 it's
+        // simply blocked (agreed rule). Everyone else keeps the on-behalf
+        // LWP-fallback path.
+        if (onBehalf && useLwpFallback && !shortLeave) {
           const fb = await switchToLwp();
           if (fb) return fb;
+        } else if (shortLeave) {
+          return NextResponse.json({ error: `Not enough ${leaveType.name} for a short leave — need 0.25, have ${available}.` }, { status: 400 });
         } else {
           return NextResponse.json({ error: `Insufficient balance. Available: ${available}, requested: ${totalDays}` }, { status: 400 });
         }
@@ -291,11 +365,20 @@ export async function POST(req: NextRequest) {
     // parse it to let the two halves of one day coexist while still blocking
     // every genuine overlap (full days, duplicate halves, multi-day ranges,
     // generic [Half Day] which carries no specific half).
-    const leaveHalf = (txt: string | null | undefined): "first" | "second" | null => {
+    // A day-segment for each booking: full day, first/second half, or a
+    // short-leave morning/evening slot. Two single-day bookings only coexist
+    // when their segments are non-overlapping complements — {first,second}
+    // or {sl-morning,sl-evening}. So an employee can take BOTH a morning and
+    // an evening short leave on the same day, but a short leave never stacks
+    // onto a half/full-day leave (or a duplicate slot).
+    const segOf = (txt: string | null | undefined): "full" | "first" | "second" | "sl-morning" | "sl-evening" => {
+      if (isShortLeaveReason(txt)) return shortLeaveSlot(txt) === "evening" ? "sl-evening" : "sl-morning";
       const m = /^\s*\[(First Half|Second Half)\]/i.exec(String(txt ?? ""));
-      return m ? (/first/i.test(m[1]) ? "first" : "second") : null;
+      if (m) return /first/i.test(m[1]) ? "first" : "second";
+      return "full";
     };
-    const newHalf = leaveHalf(reason);
+    const COMPLEMENTS = new Set(["first|second", "second|first", "sl-morning|sl-evening", "sl-evening|sl-morning"]);
+    const newSeg = segOf(reason);
     const newSingleDay = from.toDateString() === to.toDateString();
     const overlaps = await prisma.leaveApplication.findMany({
       // Include "partially_approved" — a leave that's cleared L1 but not yet L2
@@ -306,17 +389,21 @@ export async function POST(req: NextRequest) {
       select: { fromDate: true, toDate: true, reason: true },
     });
     const realConflict = overlaps.some((o) => {
-      const oHalf = leaveHalf(o.reason);
+      const oSeg = segOf(o.reason);
       const oSingleDay = new Date(o.fromDate).toDateString() === new Date(o.toDate).toDateString();
       const sameDate = new Date(o.fromDate).toDateString() === from.toDateString();
-      // Opposite halves of the same single day → not a conflict.
-      if (newHalf && oHalf && newSingleDay && oSingleDay && sameDate &&
-          ((newHalf === "first" && oHalf === "second") || (newHalf === "second" && oHalf === "first"))) {
+      // Complementary segments on the same single day → not a conflict.
+      if (newSingleDay && oSingleDay && sameDate && COMPLEMENTS.has(`${newSeg}|${oSeg}`)) {
         return false;
       }
       return true;
     });
-    if (realConflict) return NextResponse.json({ error: "Overlapping leave exists" }, { status: 400 });
+    if (realConflict) {
+      return NextResponse.json(
+        { error: shortLeave ? "You already have leave booked for this slot / day." : "Overlapping leave exists" },
+        { status: 400 },
+      );
+    }
 
     // Every leave starts as "pending" — including HR applying on behalf
     // of someone else. The on-behalf path used to auto-approve, but HR

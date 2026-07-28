@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { Pencil, ArrowLeftRight, Ban, ChevronRight, Check } from "lucide-react";
 
 // Shared, Keka-style leave summary. Rendered by BOTH the self-service leave
 // page (/dashboard/hr/leaves) and the read-only employee-profile leave view
@@ -22,6 +23,7 @@ export type LeaveSummaryProps = {
   compOffHistoryHref?: string;
   policyHref?: string;
   onCancel?: (id: number) => void;   // cancel a pending request (self page)
+  onEdit?: (app: any) => void;       // edit a PENDING request (self page + HR)
   // HR-admin row actions (employee-profile view): a ⋮ menu per leave with
   // "Change leave type" + "Cancel leave". Independent of readOnly so HR can
   // act while the rest of the panel stays read-only.
@@ -32,7 +34,10 @@ export type LeaveSummaryProps = {
 };
 
 const COLORS = ["#22d3ee", "#a78bfa", "#f472b6", "#34d399", "#fbbf24", "#f87171", "#008CFF", "#6366f1"];
-const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+// Show the EXACT balance, not a 1-decimal round-off: short leaves debit in
+// 0.25 steps, so 1.75 must display as 1.75 (toFixed(1) showed 1.8).
+// parseFloat trims trailing zeros: 2 → "2", 2.5 → "2.5", 1.75 → "1.75".
+const fmt = (n: number) => String(parseFloat(n.toFixed(2)));
 const num = (v: any) => parseFloat(v ?? "0") || 0;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -86,7 +91,7 @@ function Ring({ available, accrued, color }: { available: number; accrued: numbe
 export default function LeaveSummary({
   balances, applications, year, years, onYearChange,
   readOnly = false, subjectName, onRequestLeave, onCompOff,
-  compOffHistoryHref, policyHref, onCancel,
+  compOffHistoryHref, policyHref, onCancel, onEdit,
   manageActions = false, leaveTypes = [], onCancelLeave, onChangeType,
 }: LeaveSummaryProps) {
   // Per-row HR action menu (⋮). Portalled to <body> at the button's screen
@@ -235,6 +240,9 @@ export default function LeaveSummary({
                     <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Status</span>
                     <span className="text-[13px] text-amber-600">Pending</span>
                   </div>
+                  {!readOnly && onEdit && (
+                    <button onClick={() => onEdit(a)} className="h-7 px-3 rounded text-[11px] font-medium text-[#008CFF] hover:bg-[#008CFF]/10">Edit</button>
+                  )}
                   {!readOnly && onCancel && (
                     <button onClick={() => onCancel(a.id)} className="h-7 px-3 rounded text-[11px] font-medium text-red-500 hover:bg-red-50">Cancel</button>
                   )}
@@ -464,63 +472,87 @@ export default function LeaveSummary({
                               <>
                                 <div className="fixed inset-0 z-[90]" onClick={closeRowMenu} />
                                 <div
-                                  className="fixed z-[100] w-60 rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+                                  className="fixed z-[100] w-64 rounded-xl border border-slate-200/80 bg-white p-1.5 shadow-2xl ring-1 ring-black/[0.03]"
                                   style={(() => {
                                     const vh = typeof window !== "undefined" ? window.innerHeight : 800;
-                                    const left = Math.max(8, menuRect.right - 240);
+                                    const left = Math.max(8, menuRect.right - 256);
                                     // Open upward when the button sits in the lower part of the
                                     // viewport so the menu never spills below the fold.
                                     return menuRect.bottom > vh * 0.6
-                                      ? { bottom: vh - menuRect.top + 4, left }
-                                      : { top: menuRect.bottom + 4, left };
+                                      ? { bottom: vh - menuRect.top + 6, left }
+                                      : { top: menuRect.bottom + 6, left };
                                   })()}
                                 >
+                                  <p className="px-2.5 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Leave actions</p>
+
+                                  {/* Edit — pending leaves only (before L1). Opens the
+                                      full pre-filled form so HR can change dates / type /
+                                      shape on the employee's behalf. */}
+                                  {a.status === "pending" && onEdit && (
+                                    <button
+                                      type="button"
+                                      onClick={() => { onEdit(a); closeRowMenu(); }}
+                                      className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-medium text-slate-700 hover:bg-[#008CFF]/[0.08] hover:text-[#008CFF]"
+                                    >
+                                      <Pencil size={14} strokeWidth={2} className="text-slate-400 group-hover:text-[#008CFF]" />
+                                      Edit leave
+                                    </button>
+                                  )}
+
                                   <div
                                     className="relative"
                                     onMouseEnter={() => { if (typeMenuTimer.current) clearTimeout(typeMenuTimer.current); setTypeListOpen(true); }}
                                     onMouseLeave={() => { typeMenuTimer.current = setTimeout(() => setTypeListOpen(false), 180); }}
                                   >
-                                  <button
-                                    type="button"
-                                    onClick={() => setTypeListOpen((v) => !v)}
-                                    className="flex w-full items-center justify-between px-3 py-2 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50"
-                                  >
-                                    Change leave type
-                                    <span className="text-slate-400">›</span>
-                                  </button>
-                                  {typeListOpen && (
-                                  <div className="absolute left-full top-0 ml-1 w-56 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
-                                    {leaveTypes.length === 0 ? (
-                                      <p className="px-3 py-2 text-[11.5px] text-slate-400">No leave types.</p>
-                                    ) : leaveTypes.map((t) => {
-                                      const isCurrent = t.id === a.leaveTypeId;
-                                      const avail = balByType.get(t.id);
-                                      return (
-                                        <button
-                                          key={t.id}
-                                          type="button"
-                                          disabled={isCurrent}
-                                          onClick={() => { onChangeType?.(a.id, t.id); closeRowMenu(); }}
-                                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-[12.5px] hover:bg-sky-50 disabled:cursor-default disabled:bg-transparent"
-                                        >
-                                          <span className={isCurrent ? "text-slate-400" : "text-slate-700"}>{t.name}</span>
-                                          <span className={`shrink-0 text-[11px] ${isCurrent ? "text-slate-400" : (avail ?? 0) > 0 ? "text-emerald-600" : "text-slate-400"}`}>
-                                            {isCurrent ? "current" : avail != null ? `${fmt(avail)} left` : "—"}
-                                          </span>
-                                        </button>
-                                      );
-                                    })}
+                                    <button
+                                      type="button"
+                                      onClick={() => setTypeListOpen((v) => !v)}
+                                      className={`group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-medium text-slate-700 hover:bg-slate-100 ${typeListOpen ? "bg-slate-100" : ""}`}
+                                    >
+                                      <ArrowLeftRight size={14} strokeWidth={2} className="text-slate-400 group-hover:text-slate-600" />
+                                      <span className="flex-1 text-left">Change leave type</span>
+                                      <ChevronRight size={14} className="text-slate-400" />
+                                    </button>
+                                    {typeListOpen && (
+                                      <div className="absolute left-full top-0 ml-1.5 w-56 max-h-72 overflow-y-auto rounded-xl border border-slate-200/80 bg-white p-1.5 shadow-2xl ring-1 ring-black/[0.03]">
+                                        {leaveTypes.length === 0 ? (
+                                          <p className="px-2.5 py-2 text-[11.5px] text-slate-400">No leave types.</p>
+                                        ) : leaveTypes.map((t) => {
+                                          const isCurrent = t.id === a.leaveTypeId;
+                                          const avail = balByType.get(t.id);
+                                          return (
+                                            <button
+                                              key={t.id}
+                                              type="button"
+                                              disabled={isCurrent}
+                                              onClick={() => { onChangeType?.(a.id, t.id); closeRowMenu(); }}
+                                              className="flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-[12.5px] hover:bg-sky-50 disabled:cursor-default disabled:hover:bg-transparent"
+                                            >
+                                              <span className={`flex items-center gap-1.5 ${isCurrent ? "text-slate-400" : "text-slate-700"}`}>
+                                                {isCurrent && <Check size={13} strokeWidth={2.5} className="text-[#008CFF]" />}
+                                                {t.name}
+                                              </span>
+                                              <span className={`shrink-0 text-[11px] font-medium ${isCurrent ? "text-slate-400" : (avail ?? 0) > 0 ? "text-emerald-600" : "text-slate-400"}`}>
+                                                {isCurrent ? "current" : avail != null ? `${fmt(avail)} left` : "—"}
+                                              </span>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
                                   </div>
-                                  )}
-                                  </div>
+
                                   {cancellable && (
                                     <>
-                                      <div className="my-1 border-t border-slate-100" />
+                                      <div className="my-1 mx-1 border-t border-slate-100" />
                                       <button
                                         type="button"
                                         onClick={() => { onCancelLeave?.(a.id); closeRowMenu(); }}
-                                        className="flex w-full items-center px-3 py-2 text-[12.5px] font-medium text-red-600 hover:bg-red-50"
-                                      >Cancel leave</button>
+                                        className="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-medium text-red-600 hover:bg-red-50"
+                                      >
+                                        <Ban size={14} strokeWidth={2} className="text-red-400 group-hover:text-red-600" />
+                                        Cancel leave
+                                      </button>
                                     </>
                                   )}
                                 </div>
@@ -529,8 +561,11 @@ export default function LeaveSummary({
                             )}
                           </>
                         );
-                      })() : !readOnly && a.status === "pending" && onCancel ? (
-                        <button onClick={() => onCancel(a.id)} className="text-[11px] font-medium text-red-500 hover:underline">Cancel</button>
+                      })() : !readOnly && a.status === "pending" && (onEdit || onCancel) ? (
+                        <div className="flex items-center gap-2">
+                          {onEdit && <button onClick={() => onEdit(a)} className="text-[11px] font-medium text-[#008CFF] hover:underline">Edit</button>}
+                          {onCancel && <button onClick={() => onCancel(a.id)} className="text-[11px] font-medium text-red-500 hover:underline">Cancel</button>}
+                        </div>
                       ) : <span className="text-slate-300">⋯</span>}
                     </td>
                   </tr>

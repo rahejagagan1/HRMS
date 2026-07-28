@@ -3,6 +3,7 @@ import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import { fetcher } from "@/lib/swr";
 import LeaveSummary from "@/components/hr/leave/LeaveSummary";
+import LeaveRequestForm from "@/components/LeaveRequestForm";
 
 // Read-only mirror of an employee's personal Leave page, shown to HR inside
 // the employee profile (Attendance → Leave sub-view). Renders the SAME shared
@@ -14,6 +15,7 @@ export default function EmployeeLeavePanel({ userId, userName }: { userId: numbe
   const nowYear = new Date().getFullYear();
   const [year, setYear] = useState(nowYear);
   const years = [nowYear, nowYear - 1, nowYear - 2];
+  const [editApp, setEditApp] = useState<any | null>(null);
 
   const appsKey = `/api/hr/leaves?userId=${userId}`;
   const balKey  = `/api/hr/leaves/balance?userId=${userId}&year=${year}`;
@@ -46,19 +48,42 @@ export default function EmployeeLeavePanel({ userId, userName }: { userId: numbe
     refresh();
   };
 
+  const applyable = (Array.isArray(leaveTypes) ? leaveTypes : [])
+    .filter((t: any) => t.applicable !== false)
+    .map((t: any) => ({ id: t.id, name: t.name }));
+
   return (
-    <LeaveSummary
-      balances={balances as any[]}
-      applications={applications as any[]}
-      year={year}
-      years={years}
-      onYearChange={setYear}
-      readOnly
-      subjectName={userName}
-      manageActions
-      leaveTypes={(Array.isArray(leaveTypes) ? leaveTypes : []).map((t: any) => ({ id: t.id, name: t.name }))}
-      onCancelLeave={cancelLeave}
-      onChangeType={changeType}
-    />
+    <>
+      <LeaveSummary
+        balances={balances as any[]}
+        applications={applications as any[]}
+        year={year}
+        years={years}
+        onYearChange={setYear}
+        readOnly
+        subjectName={userName}
+        manageActions
+        leaveTypes={applyable}
+        onCancelLeave={cancelLeave}
+        onChangeType={changeType}
+        onEdit={(a) => setEditApp(a)}
+      />
+      {editApp && (
+        <LeaveRequestForm
+          kind="leave"
+          title={`Edit Leave — ${userName}`}
+          leaveTypes={applyable}
+          editId={editApp.id}
+          initial={{
+            fromDate: String(editApp.fromDate).slice(0, 10),
+            toDate:   String(editApp.toDate).slice(0, 10),
+            reason:   editApp.reason ?? "",
+            leaveTypeId: editApp.leaveTypeId ?? editApp.leaveType?.id,
+          }}
+          onClose={() => setEditApp(null)}
+          onSaved={() => { refresh(); setEditApp(null); }}
+        />
+      )}
+    </>
   );
 }

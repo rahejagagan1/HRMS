@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, isLeadershipOrHR, serverError } from "@/lib/api-auth";
+import { brandScopeUserWhere } from "@/lib/hr/brand-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -57,8 +58,15 @@ export async function GET(req: NextRequest) {
     // the <img src="/api/hr/engage/posts/<id>/media"> URL without
     // needing the bytes. Avoids the 70 MB blob round-trip that was
     // causing 16 s loads.
+    // Brand isolation (2026-07-28): the feed shows only posts AUTHORED by
+    // the viewer's own brand — YT Labs sees YT Labs posts, NB Media sees NB
+    // Media (legacy null-brand authors bucket under NB). All-brands viewers
+    // (developer / VIEW_ALL_BRANDS) keep the combined feed.
     const posts = await prisma.engagePost.findMany({
-      where: scope !== "org" ? { scope } : {},
+      where: {
+        ...(scope !== "org" ? { scope } : {}),
+        author: brandScopeUserWhere(session!.user),
+      },
       orderBy: { createdAt: "desc" },
       take: 20,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),

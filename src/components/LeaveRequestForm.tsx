@@ -11,6 +11,26 @@ import EmployeePicker, { type PickerUser } from "@/components/hr/EmployeePicker"
 import HandoffSection from "@/components/hr/HandoffSection";
 import { leaveMinDate } from "@/lib/hr/leave-date-rules";
 import { isWorkingDay, type ShiftWorkRule } from "@/lib/hr/shift-working-days";
+import { buildShortLeaveReason, isShortLeaveReason, shortLeaveSlot, type ShortLeaveSlot } from "@/lib/hr/short-leave";
+
+// Feature switch: show/hide the "Short (2h)" option in the apply form.
+// OFF for now (2026-07-28) — everything behind it keeps working (editing an
+// existing short leave still renders its slot UI); flip to true to re-launch.
+const SHORT_LEAVE_UI_ENABLED = false;
+
+// Decode a stored leave reason back into the form's shape + slot + clean note
+// (strips the leading [marker]). Used to pre-fill the Edit form.
+function parseLeaveShape(reason: string | null | undefined): {
+  shape: "full" | "first_half" | "second_half" | "short"; slot: ShortLeaveSlot; note: string;
+} {
+  const r = String(reason ?? "");
+  const strip = (s: string) => s.replace(/^\s*\[[^\]]*\]\s*/, "");
+  if (isShortLeaveReason(r))            return { shape: "short",       slot: shortLeaveSlot(r) ?? "morning", note: strip(r) };
+  if (/^\s*\[first half\]/i.test(r))    return { shape: "first_half", slot: "morning", note: strip(r) };
+  if (/^\s*\[second half\]/i.test(r))   return { shape: "second_half", slot: "morning", note: strip(r) };
+  if (/^\s*\[half day\]/i.test(r))      return { shape: "first_half", slot: "morning", note: strip(r) };
+  return { shape: "full", slot: "morning", note: r };
+}
 
 // ── Shared types ─────────────────────────────────────────────────────────────
 export type LeaveRequestKind = "wfh" | "on_duty" | "half_day" | "leave" | "regularize";
@@ -23,6 +43,12 @@ export type LeaveRequestFormProps = {
   leaveTypes?: { id: number; name: string }[];
   /** Prefill the date field (YYYY-MM-DD). */
   prefillDate?: string;
+  /** Edit mode (leave only): the LeaveApplication id being edited. When set,
+   *  the form pre-fills from `initial` and PUTs { action:"edit" } instead of
+   *  creating a new leave. Only pending leaves are editable (server-enforced). */
+  editId?: number;
+  /** Initial values for edit mode. */
+  initial?: { fromDate: string; toDate: string; reason: string; leaveTypeId?: number };
   onClose: () => void;
   /** Called after successful POST so the caller can refresh their SWR keys. */
   onSaved?: () => void;
@@ -135,7 +161,7 @@ function LeaveTypePicker({
                   {bal == null
                     ? "Not Available"
                     : bal > 0
-                      ? `${bal % 1 === 0 ? bal.toFixed(0) : bal.toFixed(1)} day${bal === 1 ? "" : "s"} available`
+                      ? `${parseFloat(bal.toFixed(2))} day${bal === 1 ? "" : "s"} available`
                       : "Not Available"}
                 </span>
               </button>
@@ -151,10 +177,14 @@ function LeaveTypePicker({
 
 // ── Main form ────────────────────────────────────────────────────────────────
 export default function LeaveRequestForm({
-  kind, title, policyText, leaveTypes, prefillDate, onClose, onSaved,
+  kind, title, policyText, leaveTypes, prefillDate, editId, initial, onClose, onSaved,
 }: LeaveRequestFormProps) {
   // IST-anchored so evening users don't see yesterday as the default.
   const today = prefillDate || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  // Edit mode: decode the existing leave's shape/slot/note so the form opens
+  // pre-filled exactly as it was submitted.
+  const isEdit = !!editId;
+  const initShape = parseLeaveShape(initial?.reason);
   const { data: session } = useSession();
   const me = session?.user as any;
   // The caller's own shift rule + anchor, so the day-count preview below
@@ -167,13 +197,13 @@ export default function LeaveRequestForm({
   // else gets clamped to today + future via the date picker's minDate prop.
   const minDate = leaveMinDate(me);
 
-  const [fromDate, setFromDate] = useState(today);
-  const [toDate,   setToDate]   = useState(today);
+  const [fromDate, setFromDate] = useState(initial?.fromDate ?? today);
+  const [toDate,   setToDate]   = useState(initial?.toDate ?? today);
   // Start with no leave type chosen — the picker shows the "Select Leave"
   // placeholder so the user makes a deliberate choice rather than accidentally
-  // submitting against the first type in the list.
-  const [leaveTypeId, setLeaveTypeId] = useState<number | "">("");
-  const [note, setNote]         = useState("");
+  // submitting against the first type in the list. (Edit pre-fills it.)
+  const [leaveTypeId, setLeaveTypeId] = useState<number | "">(initial?.leaveTypeId ?? "");
+  const [note, setNote]         = useState(isEdit ? initShape.note : "");
   const [notify, setNotify]     = useState<{ id: number; name: string; email?: string; profilePictureUrl?: string | null }[]>([]);
   const [saving, setSaving]     = useState(false);
   const [err, setErr]           = useState("");
@@ -184,17 +214,22 @@ export default function LeaveRequestForm({
   // home. Default to "first" so the form has a valid selection the
   // moment the half-day checkbox is ticked.
   const [halfKind, setHalfKind] = useState<"first" | "second">("first");
-  // Full vs half day, with which half — only meaningful on the leave form. The
-  // half-day form (`kind=half_day`) keeps its own legacy flow and ignores this.
-  const [dayKind, setDayKind] = useState<"full" | "first_half" | "second_half">("full");
-  const isHalfLeave = kind === "leave" && dayKind !== "full";
+  // Full / half / short day, with which half — only meaningful on the leave
+  // form. The half-day form (`kind=half_day`) keeps its own legacy flow.
+  const [dayKind, setDayKind] = useState<"full" | "first_half" | "second_half" | "short">(
+    isEdit && kind === "leave" ? initShape.shape : "full",
+  );
+  // Short-leave slot (2-hour): morning = first 2h of the shift, evening =
+  // last 2h. The excused window is derived server-side from the employee's
+  // own shift, so the form only sends the slot.
+  const [shortSlot, setShortSlot] = useState<ShortLeaveSlot>(isEdit ? initShape.slot : "morning");
+  const isHalfLeave  = kind === "leave" && (dayKind === "first_half" || dayKind === "second_half");
+  const isShortLeave = kind === "leave" && dayKind === "short";
 
-  // Handoff fields — apply to every kind EXCEPT regularize. Work Status
-  // is required for those forms; WFH additionally requires Time of
-  // Unavailability. POC has an opt-in N/A toggle: users / HR can mark
-  // it N/A when there's no specific cover assigned. When N/A is ticked,
-  // pocUserId submits as null.
-  const handoffApplies = kind !== "regularize";
+  // Handoff fields — apply to every kind EXCEPT regularize, and are skipped
+  // in Edit mode (the edit only touches dates / type / reason; the original
+  // POC + work status stay as filed).
+  const handoffApplies = kind !== "regularize" && !isEdit;
   const [poc, setPoc] = useState<PickerUser[]>([]);
   const [pocNa, setPocNa] = useState(false);
   const [workStatus, setWorkStatus] = useState("");
@@ -209,6 +244,7 @@ export default function LeaveRequestForm({
   // so the preview can differ by any holidays in the range — same as before.
   const days = useMemo(() => {
     if (!fromDate || !toDate) return 0;
+    if (isShortLeave) return 0.25;
     if (isHalfLeave) return 0.5;
     const a = new Date(`${fromDate}T00:00:00Z`);
     const b = new Date(`${toDate}T00:00:00Z`);
@@ -222,7 +258,7 @@ export default function LeaveRequestForm({
       cur.setUTCDate(cur.getUTCDate() + 1);
     }
     return count;
-  }, [fromDate, toDate, isHalfLeave, myShift]);
+  }, [fromDate, toDate, isHalfLeave, isShortLeave, myShift]);
 
   const submit = async () => {
     setErr("");
@@ -230,6 +266,31 @@ export default function LeaveRequestForm({
     if (new Date(fromDate) > new Date(toDate)) return setErr("From date must be on/before To date");
     if (!note.trim()) return setErr("Reason is required.");
     if (kind === "leave" && !leaveTypeId) return setErr("Please choose a leave type");
+
+    // ── Edit mode (leave only) ──────────────────────────────────────────
+    // PUT the changed core fields to the existing pending leave. The server
+    // re-runs the balance + validations (pending-only, cap, sufficiency).
+    if (isEdit && editId) {
+      setSaving(true);
+      const reason = isShortLeave
+        ? buildShortLeaveReason(shortSlot, note)
+        : dayKind === "first_half"  ? `[First Half] ${note}`
+        : dayKind === "second_half" ? `[Second Half] ${note}`
+        :                             note;
+      const singleTo = (isHalfLeave || isShortLeave) ? fromDate : toDate;
+      const res = await fetch(`/api/hr/leaves/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "edit", leaveTypeId, fromDate, toDate: singleTo, reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr((data as any).error || "Failed to update"); setSaving(false); return; }
+      globalMutate((k: any) => typeof k === "string" && k.startsWith("/api/hr/leaves"));
+      showToast("Leave updated", "success");
+      onSaved?.();
+      onClose();
+      return;
+    }
     // Handoff validation — required for Leave / WFH / On Duty / Half Day.
     // POC can be N/A (pocNa toggle) — when ticked it satisfies the rule
     // and the payload sends pocUserId=null.
@@ -304,15 +365,18 @@ export default function LeaveRequestForm({
       }
     } else if (kind === "leave") {
       url = "/api/hr/leaves";
-      // Half-day leave: force a single-date range and tag the reason so the
-      // home-page board badge + downstream consumers can detect which half.
-      // Markers must match the regexes in /api/hr/attendance/board/route.ts.
-      const reason =
-        dayKind === "first_half"  ? `[First Half] ${note}`  :
-        dayKind === "second_half" ? `[Second Half] ${note}` :
-                                    note;
-      const halfDayTo = isHalfLeave ? fromDate : toDate;
-      payload = { leaveTypeId, fromDate, toDate: halfDayTo, reason, notifyUserIds, ...handoff };
+      // Short leave: single date, marker reason ("[Short Leave - Morning/
+      // Evening]"), no leaveTypeId — the server forces Casual Leave. Half-day
+      // leave: single-date range + [First Half]/[Second Half] marker. Full
+      // leave: plain note over the chosen range.
+      const reason = isShortLeave
+        ? buildShortLeaveReason(shortSlot, note)
+        : dayKind === "first_half"  ? `[First Half] ${note}`
+        : dayKind === "second_half" ? `[Second Half] ${note}`
+        :                             note;
+      const singleDayTo = (isHalfLeave || isShortLeave) ? fromDate : toDate;
+      // Short leave now picks its type like any other leave — always send it.
+      payload = { leaveTypeId, fromDate, toDate: singleDayTo, reason, notifyUserIds, ...handoff };
       refreshKeys = ["/api/hr/leaves", "/api/hr/leaves/balance"];
     }
 
@@ -376,7 +440,7 @@ export default function LeaveRequestForm({
                   value={fromDate}
                   onChange={(v) => {
                     setFromDate(v);
-                    if (isHalfLeave) setToDate(v);
+                    if (isHalfLeave || isShortLeave) setToDate(v);
                     else if (v && (!toDate || new Date(v) > new Date(toDate))) setToDate(v);
                   }}
                   futureYears={2}
@@ -386,9 +450,9 @@ export default function LeaveRequestForm({
               </div>
               <div>
                 <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">To</p>
-                {isHalfLeave ? (
+                {(isHalfLeave || isShortLeave) ? (
                   <p className="text-[12.5px] text-slate-500 italic h-9 flex items-center">
-                    Same as From (half-day).
+                    Same as From ({isShortLeave ? "short leave" : "half-day"}).
                   </p>
                 ) : (
                   <DatePicker
@@ -403,72 +467,66 @@ export default function LeaveRequestForm({
             </div>
           </div>
 
-          {/* Full vs Half day toggle — leave form only. Half day collapses the
-              date range to a single date and saves with a [First Half] /
-              [Second Half] reason marker. The First / Second sub-toggle nests
-              under the Half Day column so it's visually scoped to that choice. */}
+          {/* Leave shape — Full / Half / Short. Half and Short both collapse to
+              a single date; Half saves a [First/Second Half] marker, Short
+              saves a [Short Leave - Morning/Evening] marker (0.25 CL, 2h).
+              SHORT_LEAVE_UI_ENABLED: the Short button is HIDDEN for now per
+              HR (2026-07-28) — all short-leave logic (marker parsing, 0.25
+              debit, slot picker, API, auto-LOP excuse) stays intact; flip
+              this flag to bring the button back. */}
           {kind === "leave" && (
-            <div className="grid grid-cols-2 gap-2 items-start">
-              {/* Left column — Full Day */}
-              <button
-                type="button"
-                onClick={() => setDayKind("full")}
-                className={`h-9 rounded-lg border text-[12.5px] font-semibold transition-colors ${
-                  dayKind === "full"
-                    ? "border-[#008CFF] bg-[#008CFF]/10 text-[#008CFF] dark:border-[#4a9cff] dark:bg-[#4a9cff]/15 dark:text-[#4a9cff]"
-                    : "border-slate-200 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 hover:border-[#008CFF]/40"
-                }`}
-              >
-                Full Day
-              </button>
-
-              {/* Right column — Half Day, with First / Second sub-toggle stacked
-                  directly underneath it so the two are visually grouped. */}
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Collapse the range to a single date when switching to half-day —
-                    // the API + leave-balance math both assume one calendar day.
-                    setToDate(fromDate);
-                    setDayKind((d) => (d === "full" ? "first_half" : d));
-                  }}
-                  className={`h-9 w-full rounded-lg border text-[12.5px] font-semibold transition-colors ${
-                    isHalfLeave
-                      ? "border-[#008CFF] bg-[#008CFF]/10 text-[#008CFF] dark:border-[#4a9cff] dark:bg-[#4a9cff]/15 dark:text-[#4a9cff]"
-                      : "border-slate-200 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 hover:border-[#008CFF]/40"
-                  }`}
-                >
-                  Half Day
-                </button>
-
-                {isHalfLeave && (
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setDayKind("first_half")}
-                      className={`h-8 rounded-md border text-[11.5px] font-medium transition-colors ${
-                        dayKind === "first_half"
-                          ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF] dark:border-[#4a9cff] dark:text-[#4a9cff]"
-                          : "border-slate-200 dark:border-white/[0.08] text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"
-                      }`}
-                    >
-                      First Half
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDayKind("second_half")}
-                      className={`h-8 rounded-md border text-[11.5px] font-medium transition-colors ${
-                        dayKind === "second_half"
-                          ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF] dark:border-[#4a9cff] dark:text-[#4a9cff]"
-                          : "border-slate-200 dark:border-white/[0.08] text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"
-                      }`}
-                    >
-                      Second Half
-                    </button>
-                  </div>
-                )}
+            <div className="space-y-2">
+              <div className={`grid gap-2 ${SHORT_LEAVE_UI_ENABLED ? "grid-cols-3" : "grid-cols-2"}`}>
+                {[
+                  { key: "full",  label: "Full Day",   on: dayKind === "full" },
+                  { key: "half",  label: "Half Day",   on: isHalfLeave },
+                  ...(SHORT_LEAVE_UI_ENABLED ? [{ key: "short", label: "Short (2h)", on: isShortLeave }] : []),
+                ].map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => {
+                      // Half + Short both assume one calendar day.
+                      if (opt.key !== "full") setToDate(fromDate);
+                      if (opt.key === "full")  setDayKind("full");
+                      if (opt.key === "half")  setDayKind((d) => (d === "first_half" || d === "second_half") ? d : "first_half");
+                      if (opt.key === "short") setDayKind("short");
+                    }}
+                    className={`h-9 rounded-lg border text-[12px] font-semibold transition-colors ${
+                      opt.on
+                        ? "border-[#008CFF] bg-[#008CFF]/10 text-[#008CFF] dark:border-[#4a9cff] dark:bg-[#4a9cff]/15 dark:text-[#4a9cff]"
+                        : "border-slate-200 dark:border-white/[0.08] text-slate-600 dark:text-slate-300 hover:border-[#008CFF]/40"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
+
+              {/* Half-day: which half. */}
+              {isHalfLeave && (
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button type="button" onClick={() => setDayKind("first_half")}
+                    className={`h-8 rounded-md border text-[11.5px] font-medium transition-colors ${dayKind === "first_half" ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF] dark:border-[#4a9cff] dark:text-[#4a9cff]" : "border-slate-200 dark:border-white/[0.08] text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"}`}>First Half</button>
+                  <button type="button" onClick={() => setDayKind("second_half")}
+                    className={`h-8 rounded-md border text-[11.5px] font-medium transition-colors ${dayKind === "second_half" ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF] dark:border-[#4a9cff] dark:text-[#4a9cff]" : "border-slate-200 dark:border-white/[0.08] text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"}`}>Second Half</button>
+                </div>
+              )}
+
+              {/* Short leave: morning / evening slot + a one-line explainer. */}
+              {isShortLeave && (
+                <>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button type="button" onClick={() => setShortSlot("morning")}
+                      className={`h-8 rounded-md border text-[11.5px] font-medium transition-colors ${shortSlot === "morning" ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF] dark:border-[#4a9cff] dark:text-[#4a9cff]" : "border-slate-200 dark:border-white/[0.08] text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"}`}>Morning (first 2h)</button>
+                    <button type="button" onClick={() => setShortSlot("evening")}
+                      className={`h-8 rounded-md border text-[11.5px] font-medium transition-colors ${shortSlot === "evening" ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF] dark:border-[#4a9cff] dark:text-[#4a9cff]" : "border-slate-200 dark:border-white/[0.08] text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"}`}>Evening (last 2h)</button>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                    2-hour leave from your shift's {shortSlot === "morning" ? "start" : "end"}. Deducts <b>0.25 day</b> from the leave type you pick below · max 2 per month.
+                  </p>
+                </>
+              )}
             </div>
           )}
 
@@ -480,7 +538,8 @@ export default function LeaveRequestForm({
             </div>
           )}
 
-          {/* Leave type — only for `kind=leave` + optional for half_day. Rich picker shows per-type balance. */}
+          {/* Leave type — for `kind=leave` (incl. short leave) + optional for
+              half_day. Rich picker shows per-type balance. */}
           {(kind === "leave" || (kind === "half_day" && leaveTypes && leaveTypes.length > 0)) && leaveTypes && leaveTypes.length > 0 && (
             <LeaveTypePicker
               leaveTypes={leaveTypes}
