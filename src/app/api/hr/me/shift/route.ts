@@ -26,6 +26,10 @@ export async function GET() {
       workDays: unknown;
       saturdayPolicy: string | null;
       saturdayWeeks: number[] | null;
+      saturdayDates: string[] | null;
+      satStartTime: string | null;
+      satEndTime: string | null;
+      satGraceMinutes: number | null;
       startTime: string | null;
       breakMinutes: number | null;
       effectiveFrom: Date;
@@ -36,7 +40,12 @@ export async function GET() {
       // the page used to fall back to a hardcoded 10:00 IST rule, which
       // wrongly flagged YT Labs employees (11:00 start) and any NB
       // Media punch inside the 5-min grace window as LATE.
+      // saturdayDates powers the "dates" (hand-picked Saturdays) policy;
+      // satStartTime/satEndTime/satGraceMinutes are the Saturday-specific
+      // shift hours (null = Saturday runs the weekday hours).
       `SELECT s."workDays", s."saturdayPolicy", s."saturdayWeeks",
+              COALESCE(s."saturdayDates", '{}') AS "saturdayDates",
+              s."satStartTime", s."satEndTime", s."satGraceMinutes",
               s."startTime", s."breakMinutes", us."effectiveFrom",
               s."createdAt" AS "shiftCreatedAt"
          FROM "UserShift" us
@@ -53,6 +62,10 @@ export async function GET() {
         workDays:       r.workDays,
         saturdayPolicy: r.saturdayPolicy,
         saturdayWeeks:  r.saturdayWeeks,
+        saturdayDates:  r.saturdayDates ?? [],
+        satStartTime:   r.satStartTime,
+        satEndTime:     r.satEndTime,
+        satGraceMinutes: r.satGraceMinutes,
         startTime:      r.startTime,
         breakMinutes:   r.breakMinutes,
         // Shift-level anchor for alternate-Saturday phase — see isWorkingDay.

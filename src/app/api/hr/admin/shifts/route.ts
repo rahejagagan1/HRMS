@@ -5,17 +5,29 @@ import { getBrandScope } from "@/lib/hr/brand-scope";
 
 export const dynamic = "force-dynamic";
 
-// Parse + validate the alternate-Saturday rule from a request body.
-//   saturdayPolicy: "all" | "alternate" | "weeks"
+// Parse + validate the Saturday rule from a request body.
+//   saturdayPolicy: "all" | "alternate" | "weeks" | "dates"
 //   saturdayWeeks:  ints 1-5 (only meaningful for "weeks")
-function parseSaturday(body: any): { policy: string; weeks: number[] } {
-  const policy = ["all", "alternate", "weeks"].includes(String(body?.saturdayPolicy))
+//   saturdayDates:  "YYYY-MM-DD" strings (only meaningful for "dates" —
+//                   the hand-picked working Saturdays, 2026-07-24)
+function parseSaturday(body: any): { policy: string; weeks: number[]; dates: string[] } {
+  const policy = ["all", "alternate", "weeks", "dates"].includes(String(body?.saturdayPolicy))
     ? String(body.saturdayPolicy) : "all";
   const raw: number[] = Array.isArray(body?.saturdayWeeks)
     ? (body.saturdayWeeks as any[]).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1 && n <= 5)
     : [];
   const weeks = Array.from(new Set(raw)).sort((a, b) => a - b);
-  return { policy, weeks: policy === "weeks" ? weeks : [] };
+  // Strict YYYY-MM-DD only — this is also what makes the ARRAY literal in
+  // setSaturday injection-safe.
+  const rawDates: string[] = Array.isArray(body?.saturdayDates)
+    ? (body.saturdayDates as any[]).map((d) => String(d)).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    : [];
+  const dates = Array.from(new Set(rawDates)).sort();
+  return {
+    policy,
+    weeks: policy === "weeks" ? weeks : [],
+    dates: policy === "dates" ? dates : [],
+  };
 }
 
 // Postgres int[] literal from a validated (integer-only) array — injection-safe.
@@ -23,11 +35,16 @@ function weeksLiteral(weeks: number[]): string {
   return weeks.length ? `ARRAY[${weeks.join(",")}]::int[]` : `ARRAY[]::int[]`;
 }
 
+// Postgres text[] literal from regex-validated YYYY-MM-DD strings — safe.
+function datesLiteral(dates: string[]): string {
+  return dates.length ? `ARRAY[${dates.map((d) => `'${d}'`).join(",")}]::text[]` : `ARRAY[]::text[]`;
+}
+
 // The saturday* columns are read/written via raw SQL so this route keeps
 // working even before `prisma generate` picks up the new columns.
-async function setSaturday(shiftId: number, policy: string, weeks: number[]) {
+async function setSaturday(shiftId: number, policy: string, weeks: number[], dates: string[] = []) {
   await prisma.$executeRawUnsafe(
-    `UPDATE "Shift" SET "saturdayPolicy" = $1, "saturdayWeeks" = ${weeksLiteral(weeks)} WHERE id = $2`,
+    `UPDATE "Shift" SET "saturdayPolicy" = $1, "saturdayWeeks" = ${weeksLiteral(weeks)}, "saturdayDates" = ${datesLiteral(dates)} WHERE id = $2`,
     policy, shiftId,
   );
 }
@@ -53,6 +70,48 @@ async function setHalfDayGrace(shiftId: number, value: number | null) {
   await prisma.$executeRawUnsafe(
     `UPDATE "Shift" SET "halfDayGraceMinutes" = $1::int WHERE id = $2`,
     value, shiftId,
+  );
+}
+
+// Saturday-specific hours + grace (2026-07-24). All-null = Saturday runs the
+// weekday hours. Sent by the form as satStartTime/satEndTime ("HH:MM") and
+// satGraceMinutes ("" = inherit breakMinutes → NULL). Raw SQL for the same
+// stale-prisma-client reason as the other new columns.
+function parseSatHours(body: any): {
+  set: boolean; start: string | null; end: string | null; grace: number | null; error?: string;
+} {
+  if (!("satStartTime" in (body ?? {})) && !("satEndTime" in (body ?? {})) && !("satGraceMinutes" in (body ?? {}))) {
+    return { set: false, start: null, end: null, grace: null };
+  }
+  const hm = (v: any): string | null => {
+    if (v === null || v === undefined || v === "") return null;
+    return /^\d{1,2}:\d{2}$/.test(String(v)) ? String(v) : "__bad__";
+  };
+  const start = hm(body.satStartTime);
+  const end   = hm(body.satEndTime);
+  if (start === "__bad__" || end === "__bad__") {
+    return { set: false, start: null, end: null, grace: null, error: "satStartTime/satEndTime must be HH:MM" };
+  }
+  // Both-or-neither: a lone start/end can't define a Saturday day length.
+  if ((start === null) !== (end === null)) {
+    return { set: false, start: null, end: null, grace: null, error: "Saturday hours need BOTH start and end time" };
+  }
+  let grace: number | null = null;
+  const rawG = body.satGraceMinutes;
+  if (rawG !== null && rawG !== undefined && rawG !== "") {
+    const parsed = Number.parseInt(String(rawG), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return { set: false, start: null, end: null, grace: null, error: "satGraceMinutes must be a non-negative integer" };
+    }
+    grace = parsed;
+  }
+  return { set: true, start, end, grace };
+}
+
+async function setSatHours(shiftId: number, start: string | null, end: string | null, grace: number | null) {
+  await prisma.$executeRawUnsafe(
+    `UPDATE "Shift" SET "satStartTime" = $1, "satEndTime" = $2, "satGraceMinutes" = $3::int WHERE id = $4`,
+    start, end, grace, shiftId,
   );
 }
 
@@ -108,7 +167,7 @@ export async function POST(req: NextRequest) {
     }
     const workDays = body.workDays ?? body.workingDays ?? ["Mon", "Tue", "Wed", "Thu", "Fri"];
     if (!name || !startTime || !endTime) return NextResponse.json({ error: "name, startTime, endTime required" }, { status: 400 });
-    const { policy, weeks } = parseSaturday(body);
+    const { policy, weeks, dates } = parseSaturday(body);
 
     // Brand auto-tag: client may pass body.brand explicitly (allowed
     // for super-admins). Otherwise default to the creator's brand —
@@ -121,19 +180,22 @@ export async function POST(req: NextRequest) {
 
     const hdGrace = parseHalfDayGrace(body);
     if (hdGrace.error) return NextResponse.json({ error: hdGrace.error }, { status: 400 });
+    const satHours = parseSatHours(body);
+    if (satHours.error) return NextResponse.json({ error: satHours.error }, { status: 400 });
 
     const shift = await prisma.shift.create({
       data: { name, startTime, endTime, breakMinutes, workDays },
     });
-    await setSaturday(shift.id, policy, weeks);
+    await setSaturday(shift.id, policy, weeks, dates);
     if (hdGrace.set) await setHalfDayGrace(shift.id, hdGrace.value);
+    if (satHours.set) await setSatHours(shift.id, satHours.start, satHours.end, satHours.grace);
     if (brand) {
       await prisma.$executeRawUnsafe(
         `UPDATE "Shift" SET brand = $1 WHERE id = $2`,
         brand, shift.id,
       );
     }
-    return NextResponse.json({ ...shift, saturdayPolicy: policy, saturdayWeeks: weeks, halfDayGraceMinutes: hdGrace.set ? hdGrace.value : null, brand }, { status: 201 });
+    return NextResponse.json({ ...shift, saturdayPolicy: policy, saturdayWeeks: weeks, saturdayDates: dates, halfDayGraceMinutes: hdGrace.set ? hdGrace.value : null, brand }, { status: 201 });
   } catch (e) { return serverError(e, "POST /api/hr/admin/shifts"); }
 }
 
@@ -158,17 +220,20 @@ export async function PUT(req: NextRequest) {
     const workDays = body.workDays ?? body.workingDays;
     const hdGrace = parseHalfDayGrace(body);
     if (hdGrace.error) return NextResponse.json({ error: hdGrace.error }, { status: 400 });
+    const satHours = parseSatHours(body);
+    if (satHours.error) return NextResponse.json({ error: satHours.error }, { status: 400 });
     const shift = await prisma.shift.update({
       where: { id: shiftId },
       data: { name, startTime, endTime, breakMinutes, workDays },
     });
     if (hdGrace.set) await setHalfDayGrace(shiftId, hdGrace.value);
+    if (satHours.set) await setSatHours(shiftId, satHours.start, satHours.end, satHours.grace);
     const hdEcho = hdGrace.set ? { halfDayGraceMinutes: hdGrace.value } : {};
     // Update the Saturday rule whenever it was supplied (the form always sends it).
-    if (body.saturdayPolicy !== undefined || body.saturdayWeeks !== undefined) {
-      const { policy, weeks } = parseSaturday(body);
-      await setSaturday(shiftId, policy, weeks);
-      return NextResponse.json({ ...shift, saturdayPolicy: policy, saturdayWeeks: weeks, ...hdEcho });
+    if (body.saturdayPolicy !== undefined || body.saturdayWeeks !== undefined || body.saturdayDates !== undefined) {
+      const { policy, weeks, dates } = parseSaturday(body);
+      await setSaturday(shiftId, policy, weeks, dates);
+      return NextResponse.json({ ...shift, saturdayPolicy: policy, saturdayWeeks: weeks, saturdayDates: dates, ...hdEcho });
     }
     return NextResponse.json({ ...shift, ...hdEcho });
   } catch (e) { return serverError(e, "PUT /api/hr/admin/shifts"); }

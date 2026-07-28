@@ -16,6 +16,9 @@
 //                   createdAt, but createdAt takes precedence.)
 //   • "weeks"     → only the week-of-month ordinals in `saturdayWeeks`
 //                   (1..5; e.g. [1,3] = 1st & 3rd Saturday).
+//   • "dates"     → only the EXACT "YYYY-MM-DD" dates in `saturdayDates`
+//                   work (2026-07-24). HR hand-picks upcoming Saturdays in
+//                   the shift form; a Saturday not in the list is off.
 //
 // Pure module (no Prisma / no DB) so both server routes and client
 // components can import it. Holidays are handled separately by callers — a
@@ -27,8 +30,12 @@ export const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as co
 /** Minimal shift shape both a Prisma `select` and an API JSON payload satisfy. */
 export type ShiftWorkRule = {
   workDays: unknown;            // expected: array of "Mon".."Sun"; validated defensively
-  saturdayPolicy?: string | null;   // "all" | "alternate" | "weeks"
+  saturdayPolicy?: string | null;   // "all" | "alternate" | "weeks" | "dates"
   saturdayWeeks?: number[] | null;
+  /// "YYYY-MM-DD" working Saturdays for the "dates" policy. Optional so
+  /// callers with a stale Prisma client (column added 2026-07-24) still
+  /// type-check; absent list = no Saturday works under "dates".
+  saturdayDates?: string[] | null;
   // Shift-level anchor for the "alternate" Saturday phase. When present it
   // is used INSTEAD of the per-user `anchor` arg so the pattern is uniform
   // across everyone on the shift. Set this to the Shift row's createdAt.
@@ -84,6 +91,12 @@ export function isWorkingDay(date: Date, shift: ShiftWorkRule, anchor?: Date | n
 
   if (dow === 6) {
     const policy = shift.saturdayPolicy ?? "all";
+    if (policy === "dates") {
+      // Hand-picked Saturdays: works only when this exact date is listed.
+      const dates = Array.isArray(shift.saturdayDates) ? shift.saturdayDates : [];
+      const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+      return dates.includes(key);
+    }
     if (policy === "alternate") {
       // Prefer the SHIFT-level anchor (createdAt) so the phase is the same
       // for every user on the shift; fall back to the per-user `anchor`

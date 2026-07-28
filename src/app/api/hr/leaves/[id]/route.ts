@@ -8,6 +8,10 @@ import { assertSameBrandOrSuperAdmin } from "@/lib/hr/cross-brand-guard";
 import { refundLopLwp } from "@/lib/hr/lop-lwp";
 import { isSingleStageApprovalEmployee } from "@/lib/hr/single-stage-approval";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
+import {
+  isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, SHORT_LEAVE_MONTHLY_CAP,
+} from "@/lib/hr/short-leave";
+import { istMonthRange } from "@/lib/ist-date";
 
 function fmtRange(from: Date, to: Date, days: number) {
   return `${from.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} – ${to.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} (${days} day${days === 1 ? "" : "s"})`;
@@ -78,71 +82,113 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       reason:        application.reason || undefined,
     } as const;
 
-    // ── EDIT (HR admin only) ─────────────────────────────────────────
-    // Lets HR admins fix mistakes after a leave is filed — change the
-    // dates, type, reason, or override the status. Balance/attendance
-    // sync only triggers when status crosses the approved boundary.
+    // ── EDIT (owner or HR admin, BEFORE L1 approval) ──────────────────
+    // The applicant can fix their own request — or HR can fix it on their
+    // behalf — but ONLY while it's still "pending" (not yet acted on by the
+    // L1 manager). Once it's L1-approved / approved, editing is closed:
+    // cancel & re-apply instead, so an already-moved balance / attendance
+    // mark never desyncs (agreed policy 2026-07-25, option A / pre-L1).
     if (action === "edit") {
-      if (!isFinalApprover) return NextResponse.json({ error: "Only HR admin can edit leaves" }, { status: 403 });
+      const isOwner = application.userId === myId;
+      if (!isOwner && !isFinalApprover) {
+        return NextResponse.json({ error: "You can only edit your own leave." }, { status: 403 });
+      }
+      if (application.status !== "pending") {
+        return NextResponse.json(
+          { error: "This leave has already been approved — cancel and re-apply to change it." },
+          { status: 400 },
+        );
+      }
 
-      const newFromRaw   = body?.fromDate;
-      const newToRaw     = body?.toDate;
-      const newReason    = typeof body?.reason === "string" ? body.reason : undefined;
-      const newTypeIdRaw = body?.leaveTypeId;
-      const newStatusRaw = typeof body?.status === "string" ? body.status : undefined;
+      const newFrom   = body?.fromDate ? new Date(body.fromDate) : new Date(application.fromDate);
+      const newTo     = body?.toDate   ? new Date(body.toDate)   : new Date(application.toDate);
+      const newReason = typeof body?.reason === "string" && body.reason.trim() ? body.reason : application.reason;
+      const newTypeId = Number.isInteger(body?.leaveTypeId) ? body.leaveTypeId : application.leaveTypeId;
+      if (newFrom > newTo) return NextResponse.json({ error: "Invalid date range" }, { status: 400 });
 
-      const data: any = {};
-      if (newFromRaw)        data.fromDate    = new Date(newFromRaw);
-      if (newToRaw)          data.toDate      = new Date(newToRaw);
-      if (newReason !== undefined) data.reason = newReason;
-      if (Number.isInteger(newTypeIdRaw)) data.leaveTypeId = newTypeIdRaw;
+      const newType = await prisma.leaveType.findUnique({ where: { id: newTypeId } });
+      if (!newType || !newType.isActive) return NextResponse.json({ error: "Unknown leave type" }, { status: 400 });
 
-      // Recompute totalDays if either date changed. Uses the same UTC-safe
-      // counter as the POST flow so weekend / holiday handling stays
-      // identical across "apply" and "edit".
-      if (data.fromDate || data.toDate) {
-        const f = data.fromDate ?? new Date(application.fromDate);
-        const t = data.toDate   ?? new Date(application.toDate);
-        // Count against the leave subject's own shift calendar (mirrors the
-        // POST flow) so alternate-Saturday shifts re-count correctly when HR
-        // edits the dates. Falls back to Mon–Fri when no shift is assigned.
-        const subjectShift = await prisma.userShift.findUnique({
-          where: { userId: application.user!.id },
-          include: { shift: true },
+      const subjectShift = await prisma.userShift.findUnique({
+        where: { userId: application.userId },
+        include: { shift: true },
+      });
+
+      // New amount — honour the leave SHAPE encoded in the (new) reason so a
+      // half-day / short leave keeps its 0.5 / 0.25 amount instead of being
+      // recounted as whole working days.
+      const nowShort = isShortLeaveReason(newReason);
+      const nowHalf  = /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(newReason ?? ""));
+      let newTotal: number;
+      if (nowShort) {
+        if (!shortLeaveSlot(newReason)) return NextResponse.json({ error: "Pick a Morning or Evening slot for the short leave." }, { status: 400 });
+        if (newFrom.toDateString() !== newTo.toDateString()) return NextResponse.json({ error: "A short leave is for a single day." }, { status: 400 });
+        if (!subjectShift?.shift) return NextResponse.json({ error: "Shift not assigned — please contact the HR department." }, { status: 400 });
+        newTotal = SHORT_LEAVE_DAYS;
+      } else if (nowHalf) {
+        newTotal = 0.5;
+      } else {
+        newTotal = await countWorkingDays(newFrom, newTo, subjectShift?.shift, subjectShift?.effectiveFrom);
+      }
+      if (newTotal === 0) return NextResponse.json({ error: "Selected dates are all non-working days / holidays for this shift" }, { status: 400 });
+
+      // Short-leave monthly cap — count the subject's OTHER live short leaves
+      // this month (exclude this application, since we're editing it).
+      if (nowShort) {
+        const { start, end } = istMonthRange(newFrom);
+        const monthRows = await prisma.leaveApplication.findMany({
+          where: { userId: application.userId, id: { not: appId }, status: { in: ["pending", "partially_approved", "approved"] }, fromDate: { gte: start, lte: end } },
+          select: { reason: true },
         });
-        data.totalDays = await countWorkingDays(f, t, subjectShift?.shift, subjectShift?.effectiveFrom);
+        if (monthRows.filter((r) => isShortLeaveReason(r.reason)).length >= SHORT_LEAVE_MONTHLY_CAP) {
+          return NextResponse.json({ error: `Short leave limit reached — max ${SHORT_LEAVE_MONTHLY_CAP} per month.` }, { status: 400 });
+        }
       }
 
-      const validStatuses = ["pending", "partially_approved", "approved", "rejected", "cancelled"];
-      if (newStatusRaw && validStatuses.includes(newStatusRaw)) {
-        data.status = newStatusRaw;
-      }
+      const oldTotal = parseFloat(application.totalDays.toString()) || 0;
 
-      // When the leave TYPE changes on a leave that currently holds a balance
-      // debit (approved → usedDays, pending/partially → pendingDays), move that
-      // debit from the old type's balance to the new type's, so the buckets
-      // stay correct. Upsert the new-type row if the employee has none yet.
-      const typeChanging = Number.isInteger(newTypeIdRaw) && newTypeIdRaw !== application.leaveTypeId;
-      const debitDays = parseFloat(application.totalDays.toString()) || 0;
-      const isApproved = application.status === "approved";
-      const isPending  = application.status === "pending" || application.status === "partially_approved";
-
-      await prisma.$transaction(async (tx) => {
-        if (typeChanging && debitDays > 0 && (isApproved || isPending)) {
-          const dec = isApproved ? { usedDays: { decrement: debitDays } } : { pendingDays: { decrement: debitDays } };
-          const inc = isApproved ? { usedDays: { increment: debitDays } } : { pendingDays: { increment: debitDays } };
+      try {
+        await prisma.$transaction(async (tx) => {
+          // Release the OLD pending debit from the old type, then reserve the
+          // NEW one on the new type — after reversal, verify the new type has
+          // room; throw to roll back if it doesn't (caught → clean 400 below).
           await tx.leaveBalance.updateMany({
             where: { userId: application.userId, leaveTypeId: application.leaveTypeId, year },
-            data:  dec,
+            data:  { pendingDays: { decrement: oldTotal } },
           });
+          const newBal = await tx.leaveBalance.findUnique({
+            where: { userId_leaveTypeId_year: { userId: application.userId, leaveTypeId: newTypeId, year } },
+          });
+          const available = newBal
+            ? parseFloat(newBal.totalDays.toString()) - parseFloat(newBal.usedDays.toString()) - parseFloat(newBal.pendingDays.toString())
+            : 0;
+          if (newTotal > available) {
+            throw new Error(`INSUFFICIENT:${newType.name}:${available}`);
+          }
           await tx.leaveBalance.upsert({
-            where:  { userId_leaveTypeId_year: { userId: application.userId, leaveTypeId: newTypeIdRaw, year } },
-            create: { userId: application.userId, leaveTypeId: newTypeIdRaw, year, totalDays: 0, usedDays: isApproved ? debitDays : 0, pendingDays: isPending ? debitDays : 0 },
-            update: inc,
+            where:  { userId_leaveTypeId_year: { userId: application.userId, leaveTypeId: newTypeId, year } },
+            create: { userId: application.userId, leaveTypeId: newTypeId, year, totalDays: 0, usedDays: 0, pendingDays: newTotal },
+            update: { pendingDays: { increment: newTotal } },
           });
+          await tx.leaveApplication.update({
+            where: { id: appId },
+            data:  { fromDate: newFrom, toDate: newTo, reason: newReason, leaveTypeId: newTypeId, totalDays: newTotal, status: "pending" },
+          });
+        });
+      } catch (e: any) {
+        const m = String(e?.message ?? "");
+        if (m.startsWith("INSUFFICIENT:")) {
+          const [, tn, av] = m.split(":");
+          return NextResponse.json({ error: `Not enough ${tn} — available ${av}, need ${newTotal}.` }, { status: 400 });
         }
-        await tx.leaveApplication.update({ where: { id: appId }, data });
-      });
+        throw e;
+      }
+
+      await writeAuditLog({
+        action: "leave.edit", entityType: "LeaveApplication", entityId: String(appId),
+        actorId: myId,
+        metadata: { by: isOwner ? "owner" : "hr", newTotal },
+      }).catch(() => {});
       return NextResponse.json({ success: true });
     }
 

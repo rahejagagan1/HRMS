@@ -136,6 +136,31 @@ export async function POST(req: NextRequest) {
       // Empty body or non-JSON body — that's fine, just no location.
     }
 
+    // Required minutes for the day (2026-07-24): normally the strict 9h
+    // (540), but on a Saturday whose shift defines its own hours
+    // (satStartTime/satEndTime) the bar is THAT day-length — a 10:00–15:00
+    // Saturday needs 5h for a full day, 2.5h for half. Raw SQL so a stale
+    // generated client can't hide the new columns.
+    let fullBarMin = 540;
+    if (today.getUTCDay() === 6) {
+      try {
+        const satRows = await prisma.$queryRawUnsafe<Array<{ satStartTime: string | null; satEndTime: string | null }>>(
+          `SELECT s."satStartTime", s."satEndTime"
+             FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId"
+            WHERE us."userId" = $1`,
+          userId,
+        );
+        const st = satRows[0]?.satStartTime, en = satRows[0]?.satEndTime;
+        const toMin = (t: string | null | undefined) => {
+          const m = /^(\d{1,2}):(\d{2})/.exec(t ?? "");
+          return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+        };
+        const sMin = toMin(st), eMin = toMin(en);
+        if (sMin !== null && eMin !== null && eMin > sMin) fullBarMin = eMin - sMin;
+      } catch { /* column missing pre-migrate → keep 540 */ }
+    }
+    const halfBarMin = Math.round(fullBarMin / 2);
+
     // ── Multi-session clock-out ─────────────────────────────────────────
     // Find today's row + currently-open session, close that session, then
     // recompute the parent row's totalMinutes from the SUM of every closed
@@ -191,13 +216,14 @@ export async function POST(req: NextRequest) {
       );
       const totalMinutes = Math.floor((sumRows[0]?.totalSeconds ?? 0) / 60);
 
-      // Strict 9-hour shift: must accumulate 540 minutes for a full day.
-      // ≥ 4.5h (270 min) but < 9h → half_day. "late" is preserved when the
-      // employee still completed the full 9h.
+      // Full day = the day's required minutes (9h normally; the Saturday
+      // shift-length when Saturday hours are defined — see fullBarMin
+      // above). ≥ half the bar but under it → half_day. "late" is
+      // preserved when the employee still completed the full bar.
       let status = existing.status;
-      if (totalMinutes >= 540) status = existing.status === "late" ? "late" : "present";
-      else if (totalMinutes >= 270) status = "half_day";
-      const overtimeMinutes = Math.max(0, totalMinutes - 540);
+      if (totalMinutes >= fullBarMin) status = existing.status === "late" ? "late" : "present";
+      else if (totalMinutes >= halfBarMin) status = "half_day";
+      const overtimeMinutes = Math.max(0, totalMinutes - fullBarMin);
 
       // Update parent row. clockOut on the row tracks the LAST session's
       // clockOut so the existing missed-clockout sweeper / UI keep working

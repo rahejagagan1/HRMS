@@ -191,10 +191,21 @@ export async function POST(req: NextRequest) {
     // Also dedupes against any day the subject already has a
     // pending/approved WFH for so HR can re-run the same range
     // without duplicating rows.
+    // saturdayDates read via raw SQL alongside the typed row so the "dates"
+    // Saturday policy works even before `prisma generate` learns the column.
     const subjShift = await prisma.userShift.findUnique({
       where: { userId: subjectUserId },
       include: { shift: { select: { workDays: true, saturdayPolicy: true, saturdayWeeks: true, createdAt: true } } },
     });
+    if (subjShift?.shift) {
+      const satRows = await prisma.$queryRawUnsafe<Array<{ saturdayDates: string[] }>>(
+        `SELECT COALESCE(s."saturdayDates", '{}') AS "saturdayDates"
+           FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId"
+          WHERE us."userId" = $1`,
+        subjectUserId,
+      );
+      (subjShift.shift as any).saturdayDates = satRows[0]?.saturdayDates ?? [];
+    }
     const shiftRule = subjShift?.shift ?? null;
     const anchor = subjShift?.effectiveFrom ?? null;
     const targetDays: Date[] = [];

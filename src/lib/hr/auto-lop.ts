@@ -107,9 +107,9 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
   // so the new saturday* columns work before `prisma generate` picks them up.
   // Users with no shift are absent from the map → never auto-LOP'd (unchanged).
   const shiftRows = await prisma.$queryRawUnsafe<Array<{
-    userId: number; effectiveFrom: Date; workDays: unknown; saturdayPolicy: string; saturdayWeeks: number[]; shiftCreatedAt: Date; startTime: string; endTime: string;
+    userId: number; effectiveFrom: Date; workDays: unknown; saturdayPolicy: string; saturdayWeeks: number[]; saturdayDates: string[]; shiftCreatedAt: Date; startTime: string; endTime: string; satStartTime: string | null; satEndTime: string | null;
   }>>(
-    `SELECT us."userId", us."effectiveFrom", s."workDays", s."saturdayPolicy", s."saturdayWeeks", s."createdAt" AS "shiftCreatedAt", s."startTime", s."endTime"
+    `SELECT us."userId", us."effectiveFrom", s."workDays", s."saturdayPolicy", s."saturdayWeeks", COALESCE(s."saturdayDates", '{}') AS "saturdayDates", s."createdAt" AS "shiftCreatedAt", s."startTime", s."endTime", s."satStartTime", s."satEndTime"
        FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId"`,
   );
   const shiftByUser = new Map(shiftRows.map((r) => [r.userId, r]));
@@ -169,7 +169,7 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
       // Alternate-Saturday phase is anchored on the SHIFT (createdAt) so it's
       // uniform for everyone on the shift — a mid-cycle joiner no longer gets
       // the opposite Saturdays. effectiveFrom stays as a fallback only.
-      if (!isWorkingDay(date, { workDays: sr.workDays, saturdayPolicy: sr.saturdayPolicy, saturdayWeeks: sr.saturdayWeeks, createdAt: sr.shiftCreatedAt }, sr.effectiveFrom)) continue;
+      if (!isWorkingDay(date, { workDays: sr.workDays, saturdayPolicy: sr.saturdayPolicy, saturdayWeeks: sr.saturdayWeeks, saturdayDates: sr.saturdayDates, createdAt: sr.shiftCreatedAt }, sr.effectiveFrom)) continue;
 
       eligibleUserIds.push(u.id);
     }
@@ -180,7 +180,12 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     // covering this date — they are NOT LOP candidates.
     const PROTECTED_LEAVE_STATUSES        = ["pending", "partially_approved", "approved"];
     const PROTECTED_REG_STATUSES          = ["pending", "partially_approved", "approved"];
-    const PROTECTED_SINGLE_STAGE_STATUSES = ["pending", "approved"];
+    // WFH / OD / comp-off are two-stage on every brand (2026-07-21), so the
+    // interim partially_approved state must protect exactly like pending —
+    // an L1-approved request must never make its subject LOOK uncovered.
+    // (Bug found 2026-07-24: Harman's L1-approved 8 Jul WFH was invisible
+    // here and he was absent-LOP'd with "no WFH" in the note.)
+    const PROTECTED_SINGLE_STAGE_STATUSES = ["pending", "partially_approved", "approved"];
 
     const [attendances, leaves, regs, wfhs, ods, compOffs] = await Promise.all([
       prisma.attendance.findMany({
@@ -260,6 +265,22 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     //   both applied halves' worth missing → full-day LOP
     // A leave / regularization / OD / comp-off the same day still shields.
     const WFH_FULL_MIN = 540, WFH_HALF_MIN = 270;
+    // Per-user day-length bars (2026-07-24): on a Saturday whose shift
+    // defines its own hours (satStartTime/satEndTime), the full bar is that
+    // day's length and half is half of it — a 10:00–15:00 Saturday needs
+    // 5h / 2.5h, not the weekday 9h / 4.5h. Other days keep the standard bars.
+    const hmToMin = (t: string | null | undefined): number | null => {
+      const m = /^(\d{1,2}):(\d{2})/.exec(t ?? "");
+      return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+    };
+    const dayBars = (uid: number): { full: number; half: number } => {
+      if (date.getUTCDay() === 6) {
+        const sr = shiftByUser.get(uid) as any;
+        const s = hmToMin(sr?.satStartTime), e = hmToMin(sr?.satEndTime);
+        if (s !== null && e !== null && e > s) return { full: e - s, half: Math.round((e - s) / 2) };
+      }
+      return { full: WFH_FULL_MIN, half: WFH_HALF_MIN };
+    };
     // Feature start: the WFH-completion rule applies ONLY to attendance on or
     // after 2026-07-01. Earlier days keep the legacy behaviour (an approved WFH
     // blanket-shields from LOP) so historical attendance is never re-judged.
@@ -289,17 +310,18 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     }
     for (const [uid, c] of wfhCover) {
       const total = attByUser.get(uid)?.totalMinutes ?? 0;
+      const bars = dayBars(uid);
       if (c.full) {
-        // Full-day WFH: strict — must work the full 9h, else full-day LOP.
-        if (total >= WFH_FULL_MIN) wfhMetIds.add(uid);
+        // Full-day WFH: strict — must work the day's full bar, else full-day LOP.
+        if (total >= bars.full) wfhMetIds.add(uid);
         else wfhFullLopIds.add(uid);
         continue;
       }
-      // Half-day WFH(s): total-minutes bar — 4.5h per applied half, worked
-      // at any point in the day (early/shifted sessions count in full).
-      const required = (c.first ? WFH_HALF_MIN : 0) + (c.second ? WFH_HALF_MIN : 0);
+      // Half-day WFH(s): total-minutes bar — half the day per applied half,
+      // worked at any point in the day (early/shifted sessions count in full).
+      const required = (c.first ? bars.half : 0) + (c.second ? bars.half : 0);
       if (total >= required) wfhMetIds.add(uid);                              // hours completed
-      else if (c.first && c.second && total < WFH_HALF_MIN) wfhFullLopIds.add(uid); // neither half's worth worked
+      else if (c.first && c.second && total < bars.half) wfhFullLopIds.add(uid); // neither half's worth worked
       else wfhHalfLopIds.add(uid);                                            // one half's worth missing
     }
     } // end WFH-completion enforcement (on/after 2026-07-01)
@@ -334,7 +356,8 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     for (const [uid, c] of halfLeave) {
       if (c.first && c.second) { leaveMetIds.add(uid); continue; } // both halves leave → whole day off
       const workedTotal = attByUser.get(uid)?.totalMinutes ?? 0;
-      if (workedTotal >= 270) leaveMetIds.add(uid);
+      // Half the day's bar — Saturday-length aware (see dayBars above).
+      if (workedTotal >= dayBars(uid).half) leaveMetIds.add(uid);
       else leaveHalfLopIds.add(uid);
     }
 
