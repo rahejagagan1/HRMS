@@ -1747,7 +1747,16 @@ export default function AttendancePage() {
                     const isLateFirstIn = !!firstIn && (() => {
                       const totalUtcMin = firstIn.getUTCHours() * 60 + firstIn.getUTCMinutes();
                       const istMin      = (totalUtcMin + 330) % (24 * 60); // +5:30
-                      return istMin > lateCutoffMin;
+                      // First-half leave/WFH (approved OR pending — matches
+                      // the clock-in route): expected from the shift
+                      // MID-POINT, so lateness is judged from there.
+                      const firstHalfOffRow =
+                        leaveFirst || wfhFirst ||
+                        pendingLeaveHalf === "first" || pendingWfhHalf === "first";
+                      const cutoff = firstHalfOffRow
+                        ? SHIFT_MID + (lateCutoffMin - SHIFT_START)
+                        : lateCutoffMin;
+                      return istMin > cutoff;
                     })();
 
                     return (

@@ -1285,6 +1285,7 @@ export default function EmployeeDetailPage() {
                     targetOrgLevel={user.orgLevel ?? null}
                     targetIsDeveloper={user.isDeveloper === true}
                     shiftStartTime={user.shift?.startTime ?? null}
+                    shiftEndTime={user.shift?.endTime ?? null}
                     shiftBreakMinutes={user.shift?.breakMinutes ?? null}
                     viewerIsGaganDev={isGaganDeveloper(me?.email)}
                   />
@@ -3401,7 +3402,7 @@ function TimelineBar({
 function EmployeeTimePanel({
   userId, userName, isHRAdmin, meDbId, joiningDate, workLocation,
   targetOrgLevel, targetIsDeveloper,
-  shiftStartTime, shiftBreakMinutes,
+  shiftStartTime, shiftEndTime, shiftBreakMinutes,
   viewerIsGaganDev = false,
 }: {
   userId: number; userName: string; isHRAdmin: boolean; meDbId: number | null;
@@ -3411,8 +3412,10 @@ function EmployeeTimePanel({
   targetIsDeveloper?: boolean;
   // Shift coords drive the LATE-chip cutoff per row. Passed in from
   // the parent so we don't refetch — /api/hr/people/[id] already
-  // includes shift in its response.
+  // includes shift in its response. endTime feeds the shift MID-POINT,
+  // the expected arrival on first-half-leave/WFH days.
   shiftStartTime?: string | null;
+  shiftEndTime?: string | null;
   shiftBreakMinutes?: number | null;
   // True ONLY when the signed-in viewer is Gagan's developer account —
   // unlocks the on-behalf "Clock Out" control below. No other developer /
@@ -4293,7 +4296,19 @@ function EmployeeTimePanel({
                   ? String(shiftStartTime).split(":").map((n: string) => Number(n) || 0)
                   : [10, 0];
                 const grace       = Number.isFinite(shiftBreakMinutes) ? Number(shiftBreakMinutes) : (shiftStartTime ? 15 : 0);
-                const cutoffMin   = sh * 60 + sm + grace;
+                // First-half leave/WFH → the employee is only expected from
+                // the shift MID-POINT, so judge lateness from there (matches
+                // the clock-in route's isFirstHalfOff rule). Pending requests
+                // count too — same as the server.
+                const firstHalfOff =
+                  (leaveHalfDir === "first" && (isLeaveApproved || isLeavePending || rec.status === "on_leave")) ||
+                  (wfhHalfDir === "first" && (isWfhApproved || isWfhPending));
+                const startMin = sh * 60 + sm;
+                let cutoffMin = startMin + grace;
+                if (firstHalfOff && shiftEndTime) {
+                  const [eh, em] = String(shiftEndTime).split(":").map((n: string) => Number(n) || 0);
+                  cutoffMin = Math.round((startMin + eh * 60 + em) / 2) + grace;
+                }
                 return istMin > cutoffMin;
               })();
               const missedClockOut = !!rec.clockIn && !rec.clockOut && !isToday && !rec.isRegularized && !isLeaveRow;
@@ -4443,7 +4458,11 @@ function EmployeeTimePanel({
                           const dot = isRegPending  ? "bg-amber-500" :
                                       isRegApproved ? "bg-emerald-500" :
                                       mins >= 480 ? "bg-emerald-500" : mins >= 240 ? "bg-amber-500" : mins > 0 ? "bg-red-500" : "bg-slate-300";
-                          if (isPresent || (reg && (isRegPending || isRegApproved))) {
+                          // Also show hours whenever REAL completed punches
+                          // exist (e.g. a split-leave day whose status became
+                          // on_leave after approval — the worked half's hours
+                          // must not vanish to a dash).
+                          if (isPresent || (hasActual && !!rec.clockOut && mins > 0) || (reg && (isRegPending || isRegApproved))) {
                             return (
                               <div className="flex items-center gap-2">
                                 <span className={`inline-block h-2 w-2 rounded-full ${dot}`} />
@@ -4476,7 +4495,9 @@ function EmployeeTimePanel({
                           if (!hasActual && reg && reg.requestedIn && reg.requestedOut) {
                             mins = Math.max(0, Math.round((new Date(reg.requestedOut).getTime() - new Date(reg.requestedIn).getTime()) / 60000));
                           }
-                          if (isPresent || (reg && (isRegPending || isRegApproved))) {
+                          // Mirror the Effective cell: real completed punches
+                          // always surface their hours (split-leave days).
+                          if (isPresent || (hasActual && !!rec.clockOut && mins > 0) || (reg && (isRegPending || isRegApproved))) {
                             return (
                               <span className={`text-[12.5px] ${isRegPending ? "italic text-amber-700" : "text-slate-700"}`}>
                                 {fmtMins(mins) || "0h 0m"}

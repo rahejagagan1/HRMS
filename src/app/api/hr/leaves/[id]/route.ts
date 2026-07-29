@@ -315,6 +315,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         if (result.raced) return NextResponse.json({ error: "Request has already been decided" }, { status: 409 });
 
         // Mark each working day in the range as on_leave (mirrors the L2 path).
+        // HALF-day leaves are EXCLUDED (2026-07-28): the leave pays only its
+        // own half — the other half is a working half whose outcome (present /
+        // half_day / half_day_lop from actual hours, judged by auto-LOP) must
+        // survive the approval. Blanket on_leave + LOP refund used to wipe a
+        // legitimate working-half penalty whenever the leave was approved late.
+        if (!isHalfDay) {
         const from = new Date(application.fromDate);
         const to   = new Date(application.toDate);
         const cur  = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
@@ -333,6 +339,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             });
           }
           cur.setUTCDate(cur.getUTCDate() + 1);
+        }
         }
 
         // Label reflects WHO finalised: CEO / HR Manager keep their named
@@ -447,6 +454,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       // IST calendar day, so we walk the range in UTC arithmetic only.
       // Using local getters/setters (getDay / setDate) leaks server wall-time
       // into the loop and can skip or duplicate a day around 18:30 UTC.
+      // HALF-day leaves are EXCLUDED (2026-07-28) — same rule as the
+      // fast-path above: the leave pays its own half only; the working
+      // half's real outcome (incl. a half_day_lop for short hours) stays.
+      if (!isHalfDay) {
       const from = new Date(application.fromDate);
       const to   = new Date(application.toDate);
       const cur  = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
@@ -465,6 +476,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           });
         }
         cur.setUTCDate(cur.getUTCDate() + 1);
+      }
       }
 
       const extras = application.notifyUserIds ?? [];
