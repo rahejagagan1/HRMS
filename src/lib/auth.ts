@@ -27,6 +27,14 @@ const DEV_LOGIN_EMAIL = "dev@nbmediaproductions.com";
 // both callbacks and all concurrent requests in that window.
 const AUTH_BUNDLE_TTL_MS = 30_000;
 
+// Session lifetimes (2026-07-28). Two limits work together:
+//   • maxAge          — idle timeout: a session unused for this long dies,
+//                       so someone away for a week must sign in again.
+//   • ABSOLUTE_MAX    — hard cap: even a daily-active user is forced to
+//                       re-authenticate at least this often.
+const SESSION_MAX_AGE_SEC  = 7  * 24 * 60 * 60;  // 7 days idle
+const ABSOLUTE_MAX_AGE_SEC = 10 * 24 * 60 * 60;  // 10 days absolute
+
 type AuthBundle = {
     dbId: number | null;
     role: string | null;
@@ -42,6 +50,10 @@ type AuthBundle = {
     scorecardFunction: string | null;
     hasReportGrants: boolean;
     isDeveloper: boolean;
+    // True once the account should lose access: deactivated, OR their exit's
+    // last working day has passed. Developers / the mock dev account are never
+    // revoked (platform accounts). Drives the auto-logout.
+    accessRevoked: boolean;
 };
 
 const userBundleSelect = {
@@ -51,10 +63,28 @@ const userBundleSelect = {
     orgLevel: true,
     teamCapsule: true,
     name: true,
+    isActive: true,
+    // HR-granted grace period — overrides the exit/inactive lockout while
+    // it's still in the future.
+    accessExtendedUntil: true,
     // department drives HR-department permissions; businessUnit is the
     // brand membership (NB Media / YT Labs) the sidebar gates tiles on.
     employeeProfile: { select: { department: true, businessUnit: true, designation: true } },
-} as const;
+    // Exit record — lastWorkingDay drives the auto-logout once it passes.
+    employeeExit: { select: { lastWorkingDay: true } },
+    // `as any` for the whole select: the generated Prisma client can lag on
+    // the newly-added `accessExtendedUntil` column (Windows DLL lock blocks
+    // `prisma generate` on the dev box). Runtime is fine — the migration
+    // already added the column.
+} as any;
+
+// True when an HR-granted access extension is still valid (today ≤ the granted
+// date). Shared by the bundle + the signIn gate so they never disagree.
+function extensionActive(accessExtendedUntil: Date | null | undefined): boolean {
+    if (!accessExtendedUntil) return false;
+    const t = new Date(); t.setUTCHours(0, 0, 0, 0);
+    return new Date(accessExtendedUntil).getTime() >= t.getTime();
+}
 
 async function loadAuthBundle(email: string): Promise<AuthBundle> {
     const isDev = developerEmails.includes(email.toLowerCase());
@@ -63,7 +93,9 @@ async function loadAuthBundle(email: string): Promise<AuthBundle> {
     // Identity + profile in one round-trip. Case-insensitive match so a
     // record stored with a stray capital (e.g. "Aditi@…") still resolves to
     // the right user — otherwise they'd log in but load a null role/profile.
-    let dbUser = await prisma.user.findFirst({
+    // `any` — the select carries a column (accessExtendedUntil) the generated
+    // client can lag on; the cast keeps every downstream field access clean.
+    let dbUser: any = await prisma.user.findFirst({
         where: { email: { equals: email, mode: "insensitive" } },
         select: userBundleSelect,
     });
@@ -94,6 +126,18 @@ async function loadAuthBundle(email: string): Promise<AuthBundle> {
 
     const profile = (dbUser as { employeeProfile?: { department?: string | null; businessUnit?: string | null; designation?: string | null } } | null)?.employeeProfile;
 
+    // Access revocation: deactivated OR last working day already passed.
+    // Only when we clearly SEE the row (never on a transient null → don't
+    // lock people out on a DB blip). Platform accounts are exempt.
+    const du = dbUser as { isActive?: boolean; accessExtendedUntil?: Date | null; employeeExit?: { lastWorkingDay?: Date | null } } | null;
+    const todayUtc = new Date(); todayUtc.setUTCHours(0, 0, 0, 0);
+    const lwd = du?.employeeExit?.lastWorkingDay ? new Date(du.employeeExit.lastWorkingDay) : null;
+    const exitedByDate = lwd ? lwd.getTime() < todayUtc.getTime() : false;
+    // An active HR extension is a master override — it lets an exited /
+    // deactivated employee keep logging in until the granted date passes.
+    const extended = extensionActive(du?.accessExtendedUntil);
+    const accessRevoked = !isDev && !isMockDevAccount && !extended && du != null && (du.isActive === false || exitedByDate);
+
     return {
         dbId: dbUser?.id ?? null,
         role: dbUser?.role ?? (isMockDevAccount ? "admin" : null),
@@ -115,6 +159,7 @@ async function loadAuthBundle(email: string): Promise<AuthBundle> {
         // shows each real user their true tabs/permissions. The mock Dev
         // Admin account keeps full access via its role=admin DB row.
         isDeveloper: isDev,
+        accessRevoked,
     };
 }
 
@@ -191,13 +236,23 @@ export const authOptions: NextAuthOptions = {
             if (!user.email) return false;
             const existingUser = await prisma.user.findFirst({
                 where: { email: { equals: user.email, mode: "insensitive" } },
-                select: { id: true, isActive: true },
-            });
+                // `as any` select — stale generated client on accessExtendedUntil.
+                select: { id: true, isActive: true, accessExtendedUntil: true, employeeExit: { select: { lastWorkingDay: true } } } as any,
+            }) as any;
             if (!existingUser) {
                 return false; // User not in DB — must be added via admin first
             }
-            if (!existingUser.isActive) {
-                return false; // User was deactivated — block login
+            // An active HR-granted extension overrides both the deactivated
+            // flag and the passed-exit-date block, so an ex-employee with a
+            // valid grace window can still sign in.
+            const extended = extensionActive(existingUser.accessExtendedUntil);
+            if (!extended) {
+                if (!existingUser.isActive) return false; // deactivated
+                const lwd = existingUser.employeeExit?.lastWorkingDay;
+                if (lwd) {
+                    const t = new Date(); t.setUTCHours(0, 0, 0, 0);
+                    if (new Date(lwd).getTime() < t.getTime()) return false; // exit date passed
+                }
             }
             // Update profile picture on login (by id — the stored email may be
             // cased differently than what Google sent).
@@ -216,6 +271,9 @@ export const authOptions: NextAuthOptions = {
         },
 
         async jwt({ token }) {
+            // Stamp the absolute login time once (first call, at sign-in) so
+            // the 10-day hard cap can be enforced even for an active user.
+            if (!(token as any).loginAt) (token as any).loginAt = Math.floor(Date.now() / 1000);
             // Refresh the middleware-critical claims (proxy.ts reads
             // token.orgLevel / token.isDeveloper to gate admin routes) from the
             // 30s-cached bundle — at most one DB fetch per user per 30s rather
@@ -227,12 +285,24 @@ export const authOptions: NextAuthOptions = {
                     (token as any).role = b.role;
                     (token as any).orgLevel = b.orgLevel;
                     (token as any).isDeveloper = b.isDeveloper;
+                    // Auto-logout: dead when access is revoked (deactivated /
+                    // exit date passed) OR the absolute 10-day cap is hit. The
+                    // middleware + session callback both honour `dead`.
+                    const ageSec = Math.floor(Date.now() / 1000) - Number((token as any).loginAt || 0);
+                    (token as any).dead = b.accessRevoked || ageSec > ABSOLUTE_MAX_AGE_SEC;
                 } catch { /* keep prior token claims on transient DB failure */ }
             }
             return token;
         },
 
-        async session({ session }) {
+        async session({ session, token }) {
+            // Killed session (exited / deactivated / past the 10-day cap) →
+            // strip the user so requireAuth + every server read treats it as
+            // logged out. The middleware redirects these to /login.
+            if ((token as any)?.dead) {
+                (session as any).user = null;
+                return session;
+            }
             const email = session.user?.email;
             if (email) {
                 try {
@@ -264,6 +334,14 @@ export const authOptions: NextAuthOptions = {
             }
             return session;
         },
+    },
+
+    // JWT sessions with a 7-day idle timeout. The absolute 10-day cap is
+    // enforced separately in the jwt callback (maxAge alone is rolling, so it
+    // would never force an active user to re-authenticate).
+    session: {
+        strategy: "jwt",
+        maxAge: SESSION_MAX_AGE_SEC,
     },
 
     pages: {

@@ -66,7 +66,11 @@ export async function proxy(request: NextRequest) {
         secret: process.env.NEXTAUTH_SECRET,
     });
 
-    if (!token) {
+    // No token, OR a token the jwt callback flagged `dead` (exited /
+    // deactivated / past the 10-day cap) → bounce to login. The session
+    // callback also blanks the user, so server reads treat these as logged
+    // out; this makes the page redirect immediate + clean.
+    if (!token || (token as any).dead === true) {
         const loginUrl = new URL("/login", request.url);
         loginUrl.searchParams.set("callbackUrl", pathname);
         return NextResponse.redirect(loginUrl);

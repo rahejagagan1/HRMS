@@ -16,7 +16,7 @@ import {
 import {
   Mail, Phone, MapPin, Briefcase, Calendar, Building2, IdCard, FileText, Laptop,
   Users as UsersIcon, Home, Search, User as UserIcon, ShieldCheck, X, Plus, Pencil,
-  MoreVertical, UserMinus, TreePine, Coffee, ClipboardList,
+  MoreVertical, UserMinus, TreePine, Coffee, ClipboardList, KeyRound,
   CheckCircle2, AlertCircle, Circle, Upload as UploadIcon, Eye, Trash2, RefreshCw,
   Clock, ArrowDownLeft, ArrowUpRight, LogOut, ChevronDown, History,
 } from "lucide-react";
@@ -382,6 +382,8 @@ export default function EmployeeDetailPage() {
   const router = useRouter();
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [pipOpen, setPipOpen] = useState(false);
+  // Grant-login-access dialog (post-exit grace window, HR-controlled).
+  const [accessExtOpen, setAccessExtOpen] = useState(false);
   // Which PROFILE-tab section is currently being edited. null = closed.
   // Each section opens its own focused modal with just that card's fields.
   const [editSection, setEditSection] = useState<null | "primary" | "contact" | "family" | "address" | "identity" | "job" | "time" | "other" | "org" | "bios" | "education">(null);
@@ -498,6 +500,16 @@ export default function EmployeeDetailPage() {
         defaultReportedById={me?.dbId != null ? Number(me.dbId) : null}
         onSaved={() => mutate(`/api/hr/people/${id}`)}
       />
+      {accessExtOpen && (
+        <AccessExtensionModal
+          userId={userId}
+          userName={user.name}
+          currentUntil={(user as any).accessExtendedUntil ?? null}
+          lastWorkingDay={user.activeExit?.lastWorkingDay ?? null}
+          onClose={() => setAccessExtOpen(false)}
+          onSaved={() => { mutate(`/api/hr/people/${id}`); setAccessExtOpen(false); }}
+        />
+      )}
       {/* ── Identity card — banner + avatar + identity + contact + dept + tabs all in one rounded card ── */}
       <div className="px-6 pt-6">
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_4px_18px_rgba(15,23,42,0.06)]">
@@ -718,6 +730,18 @@ export default function EmployeeDetailPage() {
                           >
                             <UserMinus className="h-4 w-4 text-rose-500" />
                             Initiate Offboarding
+                          </button>
+                        )}
+                        {/* Grant login access — only for exited / offboarding
+                            employees, where the post-exit grace window matters. */}
+                        {(!isActive || user?.activeExit) && (
+                          <button
+                            type="button"
+                            onClick={() => { setHeaderMenuOpen(false); setAccessExtOpen(true); }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-slate-700 hover:bg-slate-50"
+                          >
+                            <KeyRound className="h-4 w-4 text-[#008CFF]" />
+                            Grant login access
                           </button>
                         )}
                       </div>
@@ -4334,11 +4358,12 @@ function EmployeeTimePanel({
                       // Split day (half leave / half WFH) with no punches yet →
                       // show the both-segment label instead of an empty bar.
                       || (isSplitDay && !hasActualPunches)
-                      // LOP rows have no usable punches → show the centered LOP
-                      // banner instead of an empty bar. (For a half-day LOP the
-                      // row does carry a clock-in, but the day is already docked,
-                      // so the banner is the clearer signal.)
-                      || (isLop && !isRegApproved);
+                      // LOP rows WITHOUT punches show the centered LOP banner.
+                      // Punched LOP days (missed clock-out / short WFH) fall
+                      // through to the normal bar row (2026-07-28) so HR sees
+                      // the same punch evidence as the employee view — the
+                      // status icon still carries the LOP label.
+                      || (isLop && !isRegApproved && !hasActualPunches);
                     if (!showCentered) return null;
                     const fmt = (d: string | Date | null | undefined) => d
                       ? new Date(d).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })
@@ -4392,7 +4417,12 @@ function EmployeeTimePanel({
                               const hasActual = !!rec.clockIn;
                               const useReg = !hasActual && reg && (reg.requestedIn || reg.requestedOut);
                               const barIn  = useReg ? reg.requestedIn  : rec.clockIn;
-                              const barOut = useReg ? reg.requestedOut : rec.clockOut;
+                              // Parent clockOut is NULL on missed-clock-out days
+                              // even when earlier sessions closed properly (e.g.
+                              // a double-scan ghost) — fill the bar to the last
+                              // CLOSED session so the worked span stays visible.
+                              const lastClosedOut = (sess ?? []).filter((s: any) => s.clockOut).slice(-1)[0]?.clockOut ?? null;
+                              const barOut = useReg ? reg.requestedOut : (rec.clockOut ?? lastClosedOut);
                               const barTone: BarTone = useReg
                                 ? (isRegPending ? "pending" : isRegApproved ? "approved" : "default")
                                 : "default";
@@ -5165,5 +5195,108 @@ function EmployeeTimePanel({
         </div>
       ) : null}
     </section>
+  );
+}
+
+// HR grants an exited employee a login grace window of N days from today.
+// Days = 0 clears any existing grant (revokes access immediately at next check).
+function AccessExtensionModal({
+  userId, userName, currentUntil, lastWorkingDay, onClose, onSaved,
+}: {
+  userId: number;
+  userName: string;
+  currentUntil: string | null;
+  lastWorkingDay: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [days, setDays] = useState("7");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const fmt = (d: string | null) => d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }) : null;
+  const activeUntil = (() => {
+    if (!currentUntil) return null;
+    const t = new Date(); t.setUTCHours(0, 0, 0, 0);
+    return new Date(currentUntil).getTime() >= t.getTime() ? fmt(currentUntil) : null;
+  })();
+  // Preview: access ends on today + days (inclusive).
+  const preview = (() => {
+    const n = parseInt(days, 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const d = new Date(); d.setUTCHours(0, 0, 0, 0); d.setUTCDate(d.getUTCDate() + n);
+    return fmt(d.toISOString());
+  })();
+
+  const save = async (clear = false) => {
+    setBusy(true); setErr("");
+    try {
+      const payload = { days: clear ? 0 : parseInt(days, 10), reason: reason.trim() || undefined };
+      const res = await fetch(`/api/hr/people/${userId}/access-extension`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(d?.error || "Failed"); return; }
+      onSaved();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div>
+            <h3 className="flex items-center gap-2 text-[14px] font-semibold text-slate-800">
+              <KeyRound size={16} className="text-[#008CFF]" /> Grant login access
+            </h3>
+            <p className="text-[11.5px] text-slate-500">For {userName}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">✕</button>
+        </div>
+        <div className="px-5 py-4 space-y-4">
+          {err && <p className="text-[12px] text-red-500 bg-red-50 px-3 py-2 rounded-lg">{err}</p>}
+          <p className="text-[12px] text-slate-600 leading-relaxed">
+            After the last working day{lastWorkingDay ? ` (${fmt(lastWorkingDay)})` : ""} this person is locked out.
+            Grant a short grace window so they can still log in — access ends automatically when it expires.
+          </p>
+          {activeUntil && (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-[12px] text-emerald-700">
+              Currently allowed to log in until <b>{activeUntil}</b>.
+            </div>
+          )}
+          <div>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Allow access for (days)</label>
+            <input
+              type="number" min={1} max={365} value={days}
+              onChange={(e) => setDays(e.target.value)}
+              className="mt-1.5 w-full h-10 px-3 rounded-lg border border-slate-200 text-[13px] text-slate-800 focus:outline-none focus:border-[#008CFF] focus:ring-2 focus:ring-[#008CFF]/15"
+            />
+            {preview && <p className="mt-1.5 text-[11.5px] text-slate-500">They can log in through <b className="text-slate-700">{preview}</b> (inclusive).</p>}
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Reason (optional)</label>
+            <textarea
+              value={reason} onChange={(e) => setReason(e.target.value)} rows={2}
+              placeholder="e.g. knowledge transfer / pending handover"
+              className="mt-1.5 w-full px-3 py-2 rounded-lg border border-slate-200 text-[13px] text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#008CFF] resize-none"
+            />
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-5 py-3">
+          {activeUntil ? (
+            <button onClick={() => save(true)} disabled={busy}
+              className="h-9 px-3 rounded-lg text-[12px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">Revoke access now</button>
+          ) : <span />}
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="h-9 px-4 rounded-lg text-[13px] font-medium text-slate-500 hover:text-slate-800">Cancel</button>
+            <button onClick={() => save(false)} disabled={busy || !preview}
+              className="h-9 px-5 rounded-lg text-[13px] font-semibold text-white bg-[#008CFF] hover:bg-[#0070cc] disabled:opacity-60">
+              {busy ? "Saving…" : "Grant access"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

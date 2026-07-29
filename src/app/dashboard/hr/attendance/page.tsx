@@ -360,9 +360,14 @@ function TimelineBar({ liveMins, firstIn, lastOut, isOpen, sessions, isTodayRow 
   sessions?: Array<{ clockIn: string | Date; clockOut?: string | Date | null }>;
   isTodayRow?: boolean;
 }) {
-  if (!liveMins || liveMins <= 0) return <span className="text-[11px] text-slate-400">—</span>;
+  // Rows with punch sessions ALWAYS render the track + hover log — even at
+  // 0 recorded minutes (e.g. a never-clocked-out LOP day) so the punch
+  // evidence is visible. Only rows with no sessions at all show "—".
+  if ((!liveMins || liveMins <= 0) && !(sessions && sessions.length > 0)) {
+    return <span className="text-[11px] text-slate-400">—</span>;
+  }
   const SHIFT_LEN = 540; // 9h in minutes
-  const pct = Math.min((liveMins / SHIFT_LEN) * 100, 100);
+  const pct = Math.min((Math.max(0, liveMins || 0) / SHIFT_LEN) * 100, 100);
   const color    = pct >= 100 ? "bg-emerald-400" : pct >= 50 ? "bg-[#008CFF]" : "bg-orange-400";
   const dotColor = pct >= 100 ? "bg-emerald-400" : pct >= 50 ? "bg-[#008CFF]" : "bg-orange-400";
 
@@ -374,7 +379,9 @@ function TimelineBar({ liveMins, firstIn, lastOut, isOpen, sessions, isTodayRow 
       .replace(/^0/, "")  // strip leading zero on hour ("08:00" → "8:00")
       .toLowerCase();
   const inLabel  = firstIn ? fmt(firstIn) : null;
-  const outLabel = lastOut ? fmt(lastOut) : (isOpen ? "now" : null);
+  // Open session: "now" only while the day is still running — on a past
+  // day an open session is a MISSED punch, not an ongoing one.
+  const outLabel = lastOut ? fmt(lastOut) : (isOpen ? (isTodayRow ? "now" : "missed") : null);
   const tooltip  = inLabel && outLabel ? `Logged In ${inLabel} – ${outLabel}` : null;
 
   return (
@@ -1857,11 +1864,46 @@ export default function AttendancePage() {
                                       : `Pending ${pendingKind}`}
                             </span>
                           ) : isLop && !approvedRegRow ? (
-                            <span className="text-[12px] font-semibold text-red-600 dark:text-red-400">
-                              {isHalfDayLop
-                                ? "Half-day LOP — missed clock-out not regularized in time"
-                                : "Full-day LOP — absent, no attendance logged"}
-                            </span>
+                            // LOP rows still show the day's punch evidence
+                            // (2026-07-28): the bar of CLOSED sessions when
+                            // any exist — so a "clocked out, then ghost
+                            // re-clock-in" day is visibly different from a
+                            // true never-clocked-out day, which gets a
+                            // one-line "in at X — no clock-out" note.
+                            <div className="flex flex-col items-center gap-1.5">
+                              <span className="text-[12px] font-semibold text-red-600 dark:text-red-400">
+                                {isHalfDayLop
+                                  ? "Half-day LOP — missed clock-out not regularized in time"
+                                  : hasClock
+                                    ? "Full-day LOP — required hours not completed"
+                                    : "Full-day LOP — absent, no attendance logged"}
+                              </span>
+                              {sessions.length > 0 && (
+                                // Same bar + hover-log as regular days: the
+                                // fill shows recorded minutes (empty track
+                                // when nothing was recorded) and hovering
+                                // lists every in/out pair — an open past
+                                // session shows as "missed".
+                                <div className="flex items-center gap-3">
+                                  <TimelineBar
+                                    liveMins={liveMins}
+                                    firstIn={sessions[0]?.clockIn ? new Date(sessions[0].clockIn) : null}
+                                    lastOut={(() => {
+                                      for (let i = sessions.length - 1; i >= 0; i--) {
+                                        if (sessions[i]?.clockOut) return new Date(sessions[i].clockOut!);
+                                      }
+                                      return null;
+                                    })()}
+                                    isOpen={!!sessions.find((s: any) => !s.clockOut)}
+                                    sessions={sessions}
+                                    isTodayRow={isTodayRow}
+                                  />
+                                  <DayLocationPin
+                                    inRaw={sessions[0]?.clockInLocation ?? rec.location}
+                                  />
+                                </div>
+                              )}
+                            </div>
                           ) : missedClockOut && !approvedRegRow ? (
                             <span className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
                               Missed clock-out — regularize to log hours
