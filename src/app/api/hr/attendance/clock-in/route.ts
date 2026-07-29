@@ -12,6 +12,7 @@ import { evaluateOfficeGeofence } from "@/lib/office-geofence";
 import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { writeAuditLog } from "@/lib/audit-log";
 import { SHORT_LEAVE_MINUTES } from "@/lib/hr/short-leave";
+import { isPastLastWorkingDay } from "@/lib/hr/exit-access";
 
 // Real GPS coordinates required so the attendance log always has a verifiable
 // physical location. Address is optional and capped to keep payloads small.
@@ -119,6 +120,17 @@ export async function POST(req: NextRequest) {
       logDeny(req, userId, "attendance_disabled");
       return NextResponse.json(
         { error: "Attendance tracking is disabled for your account. Contact HR if this is wrong." },
+        { status: 403 },
+      );
+    }
+
+    // Once an employee's last working day has passed, attendance stops being
+    // recorded — even if HR granted a post-exit login grace window (that's for
+    // handover access, not clocking in). Their final working day still counts.
+    if (await isPastLastWorkingDay(userId)) {
+      logDeny(req, userId, "exited");
+      return NextResponse.json(
+        { error: "Your last working day has passed — attendance is no longer recorded.", code: "exited" },
         { status: 403 },
       );
     }

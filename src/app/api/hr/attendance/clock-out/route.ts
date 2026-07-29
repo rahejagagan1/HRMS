@@ -11,6 +11,7 @@ import { isAttendanceEnabled } from "@/lib/hr/notification-policy";
 import { isAfterSendTime, getWeekKey } from "@/lib/hr/pulse-week";
 import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { isExitSurveyDue } from "@/lib/hr/exit-survey";
+import { isPastLastWorkingDay } from "@/lib/hr/exit-access";
 
 // Same shape as the clock-in body. Optional here because legacy
 // callers (cron sweeper, integration tests, anyone POSTing an empty
@@ -106,6 +107,13 @@ export async function POST(req: NextRequest) {
     if (!(await isAttendanceEnabled(userId))) {
       return NextResponse.json(
         { error: "Attendance tracking is disabled for your account. Contact HR if this is wrong." },
+        { status: 403 },
+      );
+    }
+    // No attendance after the exit's last working day (matches clock-in).
+    if (await isPastLastWorkingDay(userId)) {
+      return NextResponse.json(
+        { error: "Your last working day has passed — attendance is no longer recorded.", code: "exited" },
         { status: 403 },
       );
     }
