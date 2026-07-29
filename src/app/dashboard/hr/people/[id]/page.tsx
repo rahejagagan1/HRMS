@@ -4340,9 +4340,12 @@ function EmployeeTimePanel({
                           payroll counts it as ½ day (0.5 LOP). Surface it loudly
                           so HR doesn't mistake the "completed punch" ✓ for a full
                           day. Suppressed while a request is pending / for today. */}
-                      {rec.status === "half_day" && !isToday && !hasPendingAny ? <span title="Worked under 9h — counts as ½ day (0.5 LOP) in payroll unless regularized" className="inline-flex items-center gap-0.5 rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700"><AlertCircle size={10} strokeWidth={2.5} /> ½ Half day</span> : null}
-                      {missedClockOut && !hasPendingAny && !isLop ? <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span> : null}
-                      {isLateFirstIn && !!rec.clockIn && !hasPendingAny && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
+                      {/* ALL factual tags show together (2026-07-29) —
+                          pending requests never hide them; only an approved
+                          regularization (isRegularized) clears the day. */}
+                      {rec.status === "half_day" && !isToday ? <span title="Worked under 9h — counts as ½ day (0.5 LOP) in payroll unless regularized" className="inline-flex items-center gap-0.5 rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700"><AlertCircle size={10} strokeWidth={2.5} /> ½ Half day</span> : null}
+                      {missedClockOut ? <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span> : null}
+                      {isLateFirstIn && !!rec.clockIn && !rec.isRegularized && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
                       {isOnBreak ? <span className="inline-flex items-center rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">On break</span> : null}
                     </div>
                     {/* Split-day summary so HR + the employee can see BOTH halves
