@@ -1655,12 +1655,26 @@ export default function AttendancePage() {
                     };
                     const pendingWfhHalf   = pendingWfhRow ? pHalf(pendingWfhRow.reason) : null;
                     const pendingLeaveHalf = pendingLeaveRow ? pHalf(pendingLeaveRow.reason) : null;
+                    // ALL open half-day leaves for this date (2026-07-29): a day
+                    // can carry TWO half requests (e.g. 1st-half Sick + 2nd-half
+                    // LWP) — the label must name BOTH, not assume the other half
+                    // is "Office" from just the first row found.
+                    const pendingHalfLeaves = myLeaves.filter((l: any) => {
+                      if (l.status !== "pending" && l.status !== "partially_approved") return false;
+                      const from = String(l.fromDate).slice(0, 10);
+                      const to   = String(l.toDate).slice(0, 10);
+                      return dateIso >= from && dateIso <= to && pHalf(l.reason) !== null;
+                    });
                     const pendingSplitLabel = (() => {
                       if (!pendingWfhHalf && !pendingLeaveHalf) return null;
-                      const kind = (which: "first" | "second") =>
-                        pendingLeaveHalf === which ? (pendingLeaveRow?.leaveType?.name || "Leave")
-                        : pendingWfhHalf === which ? "WFH"
-                        : "Office";
+                      const kind = (which: "first" | "second") => {
+                        const lv = pendingHalfLeaves.find((l: any) => pHalf(l.reason) === which);
+                        if (lv) return lv.leaveType?.name || "Leave";
+                        if (pendingWfhHalf === which) return "WFH";
+                        // The other half may be covered by an APPROVED half leave.
+                        if (approvedLeave && pHalf(approvedLeave.reason) === which) return approvedLeave.leaveType?.name || "Leave";
+                        return "Office";
+                      };
                       return `1st Half ${kind("first")} · 2nd Half ${kind("second")}`;
                     })();
                     // Missed clock-out: clocked in on a past day but never clocked out.
@@ -1797,7 +1811,7 @@ export default function AttendancePage() {
                                 has been flagged isRegularized=true (server
                                 already corrected the row even if regsData
                                 hasn't refreshed in this client yet). */}
-                            {missedClockOut && !hasPendingAny && !approvedRegRow && !rec.isRegularized && (
+                            {missedClockOut && !approvedRegRow && !rec.isRegularized && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-bold uppercase tracking-wider">Missed</span>
                             )}
                             {/* LATE — first clock-in past 10:00 AM IST.
@@ -1807,7 +1821,11 @@ export default function AttendancePage() {
                                 the third guard, approved late-clock-in
                                 regularizations leave the LATE chip up if
                                 regsData hadn't been refreshed yet. */}
-                            {isLateFirstIn && hasClock && !hasPendingAny && !approvedRegRow && !rec.isRegularized && (
+                            {/* ALL factual tags show together (2026-07-29) —
+                                pending requests never hide Late/Missed; only
+                                an APPROVED regularization (the day was
+                                actually corrected) clears them. */}
+                            {isLateFirstIn && hasClock && !approvedRegRow && !rec.isRegularized && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-bold uppercase tracking-wider">Late</span>
                             )}
                             {/* "ON BREAK" — currently between sessions on
@@ -1827,12 +1845,12 @@ export default function AttendancePage() {
                                 {pendingSplitLabel}
                               </span>
                             )}
-                            {!hasPendingAny && approvedWfhKind && (
+                            {approvedWfhKind && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold uppercase tracking-wider">
                                 {approvedWfhKind}
                               </span>
                             )}
-                            {!hasPendingAny && wfhOtherHalfLabel && (
+                            {wfhOtherHalfLabel && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-bold uppercase tracking-wider">
                                 {wfhOtherHalfLabel}
                               </span>
@@ -1861,17 +1879,43 @@ export default function AttendancePage() {
                             all sit aligned under the centred TIMELINE header. */}
                         <td className="px-5 py-3 text-center">
                           {hasPendingAny ? (
-                            <span className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
-                              {pendingKind === "regularization" && pendingRegRow
-                                ? `Regularization Pending${regWindow(pendingRegRow) ? ` · ${regWindow(pendingRegRow)}` : ""}`
-                                : pendingKind === "leave" && pendingLeaveRow
-                                  ? `Leave Pending — ${pendingLeaveRow?.leaveType?.name || "Leave"}${pendingSplitLabel ? ` · ${pendingSplitLabel}` : ""}`
-                                  : pendingKind === "WFH"
-                                    ? `WFH Pending Approval${pendingSplitLabel ? ` · ${pendingSplitLabel}` : ""}`
-                                    : pendingKind === "On-Duty"
-                                      ? "On-Duty Pending Approval"
-                                      : `Pending ${pendingKind}`}
-                            </span>
+                            // Pending days still show the day's REAL punches
+                            // (2026-07-29): the pending label sits above the
+                            // same bar + hover-log as a normal day whenever
+                            // the user clocked any time at all.
+                            <div className="flex flex-col items-center gap-1.5">
+                              <span className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
+                                {pendingKind === "regularization" && pendingRegRow
+                                  ? `Regularization Pending${regWindow(pendingRegRow) ? ` · ${regWindow(pendingRegRow)}` : ""}`
+                                  : pendingKind === "leave" && pendingLeaveRow
+                                    ? `Leave Pending — ${pendingLeaveRow?.leaveType?.name || "Leave"}${pendingSplitLabel ? ` · ${pendingSplitLabel}` : ""}`
+                                    : pendingKind === "WFH"
+                                      ? `WFH Pending Approval${pendingSplitLabel ? ` · ${pendingSplitLabel}` : ""}`
+                                      : pendingKind === "On-Duty"
+                                        ? "On-Duty Pending Approval"
+                                        : `Pending ${pendingKind}`}
+                              </span>
+                              {sessions.length > 0 && (
+                                <div className="flex items-center gap-3">
+                                  <TimelineBar
+                                    liveMins={liveMins}
+                                    firstIn={sessions[0]?.clockIn ? new Date(sessions[0].clockIn) : null}
+                                    lastOut={(() => {
+                                      for (let i = sessions.length - 1; i >= 0; i--) {
+                                        if (sessions[i]?.clockOut) return new Date(sessions[i].clockOut!);
+                                      }
+                                      return null;
+                                    })()}
+                                    isOpen={!!sessions.find((s) => !s.clockOut)}
+                                    sessions={sessions}
+                                    isTodayRow={isTodayRow}
+                                  />
+                                  <DayLocationPin
+                                    inRaw={sessions[0]?.clockInLocation ?? rec.location}
+                                  />
+                                </div>
+                              )}
+                            </div>
                           ) : isLop && !approvedRegRow ? (
                             // LOP rows still show the day's punch evidence
                             // (2026-07-28): the bar of CLOSED sessions when
@@ -1914,9 +1958,33 @@ export default function AttendancePage() {
                               )}
                             </div>
                           ) : missedClockOut && !approvedRegRow ? (
-                            <span className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
-                              Missed clock-out — regularize to log hours
-                            </span>
+                            // Missed-clockout days keep their punch evidence
+                            // visible too — label above the standard bar.
+                            <div className="flex flex-col items-center gap-1.5">
+                              <span className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
+                                Missed clock-out — regularize to log hours
+                              </span>
+                              {sessions.length > 0 && (
+                                <div className="flex items-center gap-3">
+                                  <TimelineBar
+                                    liveMins={liveMins}
+                                    firstIn={sessions[0]?.clockIn ? new Date(sessions[0].clockIn) : null}
+                                    lastOut={(() => {
+                                      for (let i = sessions.length - 1; i >= 0; i--) {
+                                        if (sessions[i]?.clockOut) return new Date(sessions[i].clockOut!);
+                                      }
+                                      return null;
+                                    })()}
+                                    isOpen={!!sessions.find((s) => !s.clockOut)}
+                                    sessions={sessions}
+                                    isTodayRow={isTodayRow}
+                                  />
+                                  <DayLocationPin
+                                    inRaw={sessions[0]?.clockInLocation ?? rec.location}
+                                  />
+                                </div>
+                              )}
+                            </div>
                           ) : approvedRegRow && (missedClockOut || !rec.clockIn) ? (
                             <span className="text-[12px] font-medium text-emerald-600 dark:text-emerald-400">
                               Regularized{regWindow(approvedRegRow) ? ` · ${regWindow(approvedRegRow)}` : ""}
@@ -1977,16 +2045,19 @@ export default function AttendancePage() {
                           )}
                         </td>
 
-                        {/* EFFECTIVE HOURS — centered to match its centred header. */}
+                        {/* EFFECTIVE HOURS — centered to match its centred header.
+                            Recorded minutes ALWAYS show (2026-07-29), even on
+                            missed-clockout days — only a day with zero recorded
+                            time keeps the dash. */}
                         <td className="px-5 py-3 text-center">
-                          {missedClockOut ? (
-                            <span className="text-[12px] text-slate-400">—</span>
-                          ) : liveMins > 0 ? (
+                          {liveMins > 0 ? (
                             <div className="flex items-center justify-center gap-2">
                               <span className={`w-2 h-2 rounded-full shrink-0 ${pct >= 90 ? "bg-emerald-400" : pct >= 50 ? "bg-[#008CFF]" : "bg-orange-400"}`} />
                               <span className="text-[13px] text-slate-800 dark:text-white">{hrs}</span>
                               {pct < 90 && <span className="text-[11px] text-slate-400">+</span>}
                             </div>
+                          ) : missedClockOut ? (
+                            <span className="text-[12px] text-slate-400">—</span>
                           ) : (isHoliday || isWeekend) ? (
                             <span className="text-slate-400 text-lg">···</span>
                           ) : null}
@@ -1995,10 +2066,10 @@ export default function AttendancePage() {
                         {/* GROSS HOURS — wall-clock incl. breaks (≥ Effective).
                             Centered to match its centred header. */}
                         <td className="px-5 py-3 text-center text-[13px] text-slate-700 dark:text-slate-300">
-                          {missedClockOut
-                            ? <span className="text-slate-400">—</span>
-                            : liveMins > 0
-                              ? grossStr
+                          {liveMins > 0
+                            ? grossStr
+                            : missedClockOut
+                              ? <span className="text-slate-400">—</span>
                               : (isHoliday || isWeekend)
                                 ? <span className="text-slate-400 text-lg">···</span>
                                 : ""}

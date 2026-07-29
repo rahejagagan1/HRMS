@@ -4234,10 +4234,24 @@ function EmployeeTimePanel({
               const isLeaveRow = (rec.status === "on_leave" || isLeaveApproved) && !leaveHalfDir;
               // Both-segment label for a split day (half-day leave and/or half WFH):
               // each half is the leave type / WFH / (expected) Office.
-              const halfKind = (which: "first" | "second"): string =>
-                leaveHalfDir === which ? (leaveTypeName || "Leave")
-                : wfhHalfDir === which ? "WFH"
-                : "Office";
+              // A day can carry TWO half-day leaves (e.g. 1st-half Sick +
+              // 2nd-half LWP), so check ALL leaves covering the date — not
+              // just the single "best" row (2026-07-29).
+              const halfLeaveFor = (which: "first" | "second") =>
+                userLeaves.find((l: any) => {
+                  if (l.status === "rejected" || l.status === "cancelled") return false;
+                  const from = String(l.fromDate).slice(0, 10);
+                  const to   = String(l.toDate).slice(0, 10);
+                  if (!(dateOnly >= from && dateOnly <= to)) return false;
+                  const re = which === "first" ? /\[first\s+half\]/i : /\[second\s+half\]/i;
+                  return re.test(l.reason ?? "");
+                });
+              const halfKind = (which: "first" | "second"): string => {
+                const lv = halfLeaveFor(which);
+                if (lv) return lv.leaveType?.name || "Leave";
+                if (wfhHalfDir === which) return "WFH";
+                return "Office";
+              };
               const isSplitDay = !!(leaveHalfDir || wfhHalfDir);
               const splitLabel = isSplitDay ? `1st Half ${halfKind("first")} · 2nd Half ${halfKind("second")}` : null;
 
@@ -4340,9 +4354,12 @@ function EmployeeTimePanel({
                           payroll counts it as ½ day (0.5 LOP). Surface it loudly
                           so HR doesn't mistake the "completed punch" ✓ for a full
                           day. Suppressed while a request is pending / for today. */}
-                      {rec.status === "half_day" && !isToday && !hasPendingAny ? <span title="Worked under 9h — counts as ½ day (0.5 LOP) in payroll unless regularized" className="inline-flex items-center gap-0.5 rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700"><AlertCircle size={10} strokeWidth={2.5} /> ½ Half day</span> : null}
-                      {missedClockOut && !hasPendingAny && !isLop ? <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span> : null}
-                      {isLateFirstIn && !!rec.clockIn && !hasPendingAny && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
+                      {/* ALL factual tags show together (2026-07-29) —
+                          pending requests never hide them; only an approved
+                          regularization (isRegularized) clears the day. */}
+                      {rec.status === "half_day" && !isToday ? <span title="Worked under 9h — counts as ½ day (0.5 LOP) in payroll unless regularized" className="inline-flex items-center gap-0.5 rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700"><AlertCircle size={10} strokeWidth={2.5} /> ½ Half day</span> : null}
+                      {missedClockOut ? <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span> : null}
+                      {isLateFirstIn && !!rec.clockIn && !rec.isRegularized && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
                       {isOnBreak ? <span className="inline-flex items-center rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">On break</span> : null}
                     </div>
                     {/* Split-day summary so HR + the employee can see BOTH halves

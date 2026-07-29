@@ -11,6 +11,8 @@ import { isAttendanceEnabled } from "@/lib/hr/notification-policy";
 import { isAfterSendTime, getWeekKey } from "@/lib/hr/pulse-week";
 import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { isExitSurveyDue } from "@/lib/hr/exit-survey";
+import { isPastLastWorkingDay } from "@/lib/hr/exit-access";
+import { dayBars } from "@/lib/hr/day-rules";
 
 // Same shape as the clock-in body. Optional here because legacy
 // callers (cron sweeper, integration tests, anyone POSTing an empty
@@ -109,6 +111,13 @@ export async function POST(req: NextRequest) {
         { status: 403 },
       );
     }
+    // No attendance after the exit's last working day (matches clock-in).
+    if (await isPastLastWorkingDay(userId)) {
+      return NextResponse.json(
+        { error: "Your last working day has passed — attendance is no longer recorded.", code: "exited" },
+        { status: 403 },
+      );
+    }
     const serverNow = new Date();
     const today = istTodayDateOnly();
 
@@ -136,30 +145,22 @@ export async function POST(req: NextRequest) {
       // Empty body or non-JSON body — that's fine, just no location.
     }
 
-    // Required minutes for the day (2026-07-24): normally the strict 9h
-    // (540), but on a Saturday whose shift defines its own hours
-    // (satStartTime/satEndTime) the bar is THAT day-length — a 10:00–15:00
-    // Saturday needs 5h for a full day, 2.5h for half. Raw SQL so a stale
-    // generated client can't hide the new columns.
-    let fullBarMin = 540;
-    if (today.getUTCDay() === 6) {
-      try {
-        const satRows = await prisma.$queryRawUnsafe<Array<{ satStartTime: string | null; satEndTime: string | null }>>(
-          `SELECT s."satStartTime", s."satEndTime"
-             FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId"
-            WHERE us."userId" = $1`,
-          userId,
-        );
-        const st = satRows[0]?.satStartTime, en = satRows[0]?.satEndTime;
-        const toMin = (t: string | null | undefined) => {
-          const m = /^(\d{1,2}):(\d{2})/.exec(t ?? "");
-          return m ? Number(m[1]) * 60 + Number(m[2]) : null;
-        };
-        const sMin = toMin(st), eMin = toMin(en);
-        if (sMin !== null && eMin !== null && eMin > sMin) fullBarMin = eMin - sMin;
-      } catch { /* column missing pre-migrate → keep 540 */ }
-    }
-    const halfBarMin = Math.round(fullBarMin / 2);
+    // Required minutes for the day — shared day-rules (Saturday-aware:
+    // a 10:00–15:00 Saturday needs 5h full / 2.5h half; other days the
+    // standard 9h / 4.5h). Shift fetched via raw SQL so a stale generated
+    // client can't hide the sat* columns.
+    let dayShift: { startTime: string | null; endTime: string | null; breakMinutes: number | null; satStartTime: string | null; satEndTime: string | null; satGraceMinutes: number | null } | null = null;
+    try {
+      const rows = await prisma.$queryRawUnsafe<Array<NonNullable<typeof dayShift>>>(
+        `SELECT s."startTime", s."endTime", s."breakMinutes",
+                s."satStartTime", s."satEndTime", s."satGraceMinutes"
+           FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId"
+          WHERE us."userId" = $1`,
+        userId,
+      );
+      dayShift = rows[0] ?? null;
+    } catch { /* columns missing pre-migrate → defaults apply */ }
+    const { full: fullBarMin, half: halfBarMin } = dayBars(today, dayShift);
 
     // ── Multi-session clock-out ─────────────────────────────────────────
     // Find today's row + currently-open session, close that session, then
