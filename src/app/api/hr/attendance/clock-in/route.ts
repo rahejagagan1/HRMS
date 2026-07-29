@@ -13,6 +13,7 @@ import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { writeAuditLog } from "@/lib/audit-log";
 import { SHORT_LEAVE_MINUTES } from "@/lib/hr/short-leave";
 import { isPastLastWorkingDay } from "@/lib/hr/exit-access";
+import { lateCutoffMinFor } from "@/lib/hr/day-rules";
 
 // Real GPS coordinates required so the attendance log always has a verifiable
 // physical location. Address is optional and capped to keep payloads small.
@@ -219,33 +220,13 @@ export async function POST(req: NextRequest) {
     let status = "present";
     const nowMin = istMinutesOfDay(now);
     if (userShift?.shift) {
-      // Saturday-specific hours/grace (2026-07-24): when today is a Saturday
-      // and the shift defines satStartTime/satEndTime, the whole late logic
-      // runs on THOSE times (own grace optional; falls back to the main
-      // grace). Read via `as any` — stale generated client tolerance.
-      const isSaturday = today.getUTCDay() === 6;
-      const satStart = (userShift.shift as any).satStartTime as string | null | undefined;
-      const satEnd   = (userShift.shift as any).satEndTime as string | null | undefined;
-      const useSat   = isSaturday && !!satStart && !!satEnd;
-      const [sh, sm] = (useSat ? satStart! : userShift.shift.startTime).split(":").map(Number);
-      const [eh, em] = (useSat ? satEnd!   : userShift.shift.endTime).split(":").map(Number);
-      const mainGrace = Number.isFinite(userShift.shift.breakMinutes) ? userShift.shift.breakMinutes : 15;
-      const satGraceRaw = (userShift.shift as any).satGraceMinutes;
-      const grace = useSat && Number.isFinite(satGraceRaw) ? Number(satGraceRaw) : mainGrace;
-      const startMin = sh * 60 + sm;
-      const midMin   = Math.round((startMin + (eh * 60 + em)) / 2);
-      // Cutoff precedence — the ONE grace period (Shift.breakMinutes) applies
-      // to every arrival kind (the separate half-day grace was merged back
-      // into it, 2026-07-24):
-      //   • First-half off (half-day leave/WFH) → mid-point + grace.
-      //   • Morning short leave → shift start + 2h + grace
-      //     (NB 10:00+2h+15m → 12:15; YT 11:00+2h+1m → 13:01).
-      //   • Otherwise → shift start + grace.
-      const lateCutoffMin = isFirstHalfOff
-        ? midMin + grace
-        : morningShortLeave
-          ? startMin + SHORT_LEAVE_MINUTES + grace
-          : startMin + grace;
+      // ALL cutoff maths (Saturday-specific hours/grace, first-half-off
+      // mid-point, morning short-leave shift) lives in the shared
+      // day-rules module — the single source of truth for lateness.
+      const lateCutoffMin = lateCutoffMinFor(today, userShift.shift as any, {
+        firstHalfOff: isFirstHalfOff,
+        morningShortLeaveMinutes: morningShortLeave ? SHORT_LEAVE_MINUTES : 0,
+      });
       if (nowMin > lateCutoffMin) status = "late";
     } else if (nowMin >= (isFirstHalfOff ? 14 * 60 : 10 * 60)) {
       status = "late"; // no shift assigned → legacy cutoff (2 PM if first-half off, else 10 AM)

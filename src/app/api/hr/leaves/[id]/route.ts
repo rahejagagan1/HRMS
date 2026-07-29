@@ -13,6 +13,34 @@ import {
 } from "@/lib/hr/short-leave";
 import { istMonthRange } from "@/lib/ist-date";
 
+// After approving a HALF-day leave: if the OTHER half of the same date is
+// also covered by an approved leave, the whole day is now leave — mark it
+// on_leave and refund any auto-LOP. A single half never touches attendance
+// (the working half must earn its own outcome — see the isHalfDay guards
+// below), but two approved halves together earn the full-day treatment.
+async function settleFullyCoveredHalfDay(
+  userId: number, dateOnly: Date, thisReason: string | null | undefined, thisAppId: number,
+): Promise<void> {
+  const r = String(thisReason ?? "");
+  const thisHalf = /\[first\s+half\]/i.test(r) ? "first" : /\[second\s+half\]/i.test(r) ? "second" : null;
+  if (!thisHalf) return; // [Half Day] without a side — can't pair reliably
+  const otherHalfRe = thisHalf === "first" ? /\[second\s+half\]/i : /\[first\s+half\]/i;
+  const others = await prisma.leaveApplication.findMany({
+    where: {
+      userId, status: "approved", id: { not: thisAppId },
+      fromDate: { lte: dateOnly }, toDate: { gte: dateOnly },
+    },
+    select: { reason: true },
+  });
+  if (!others.some((o) => otherHalfRe.test(String(o.reason ?? "")))) return;
+  await refundLopLwp(prisma, userId, dateOnly);
+  await prisma.attendance.upsert({
+    where: { userId_date: { userId, date: dateOnly } },
+    create: { userId, date: dateOnly, status: "on_leave" },
+    update: { status: "on_leave" },
+  });
+}
+
 function fmtRange(from: Date, to: Date, days: number) {
   return `${from.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} – ${to.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} (${days} day${days === 1 ? "" : "s"})`;
 }
@@ -340,6 +368,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
           }
           cur.setUTCDate(cur.getUTCDate() + 1);
         }
+        } else {
+          // Half-day approval: if this completes FULL leave coverage of the
+          // date (other half already approved), settle the day as on_leave.
+          await settleFullyCoveredHalfDay(application.userId, new Date(application.fromDate), application.reason, appId);
         }
 
         // Label reflects WHO finalised: CEO / HR Manager keep their named
@@ -477,6 +509,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         }
         cur.setUTCDate(cur.getUTCDate() + 1);
       }
+      } else {
+        // Half-day approval: if this completes FULL leave coverage of the
+        // date (other half already approved), settle the day as on_leave.
+        await settleFullyCoveredHalfDay(application.userId, new Date(application.fromDate), application.reason, appId);
       }
 
       const extras = application.notifyUserIds ?? [];

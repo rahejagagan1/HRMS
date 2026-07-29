@@ -4234,10 +4234,24 @@ function EmployeeTimePanel({
               const isLeaveRow = (rec.status === "on_leave" || isLeaveApproved) && !leaveHalfDir;
               // Both-segment label for a split day (half-day leave and/or half WFH):
               // each half is the leave type / WFH / (expected) Office.
-              const halfKind = (which: "first" | "second"): string =>
-                leaveHalfDir === which ? (leaveTypeName || "Leave")
-                : wfhHalfDir === which ? "WFH"
-                : "Office";
+              // A day can carry TWO half-day leaves (e.g. 1st-half Sick +
+              // 2nd-half LWP), so check ALL leaves covering the date — not
+              // just the single "best" row (2026-07-29).
+              const halfLeaveFor = (which: "first" | "second") =>
+                userLeaves.find((l: any) => {
+                  if (l.status === "rejected" || l.status === "cancelled") return false;
+                  const from = String(l.fromDate).slice(0, 10);
+                  const to   = String(l.toDate).slice(0, 10);
+                  if (!(dateOnly >= from && dateOnly <= to)) return false;
+                  const re = which === "first" ? /\[first\s+half\]/i : /\[second\s+half\]/i;
+                  return re.test(l.reason ?? "");
+                });
+              const halfKind = (which: "first" | "second"): string => {
+                const lv = halfLeaveFor(which);
+                if (lv) return lv.leaveType?.name || "Leave";
+                if (wfhHalfDir === which) return "WFH";
+                return "Office";
+              };
               const isSplitDay = !!(leaveHalfDir || wfhHalfDir);
               const splitLabel = isSplitDay ? `1st Half ${halfKind("first")} · 2nd Half ${halfKind("second")}` : null;
 

@@ -20,6 +20,7 @@
 import prisma from "@/lib/prisma";
 import { istTodayDateOnly } from "@/lib/ist-date";
 import { isWorkingDay } from "@/lib/hr/shift-working-days";
+import { ACTIVE_REQUEST_STATUSES, dayBars } from "@/lib/hr/day-rules";
 import { getPoliciesByUser } from "@/lib/hr/notification-policy";
 
 // 48h grace + the day itself = 3 calendar days between "missed day" and
@@ -177,15 +178,13 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     if (eligibleUserIds.length === 0) continue;
 
     // Find users who already have a record / pending / approved request
-    // covering this date — they are NOT LOP candidates.
-    const PROTECTED_LEAVE_STATUSES        = ["pending", "partially_approved", "approved"];
-    const PROTECTED_REG_STATUSES          = ["pending", "partially_approved", "approved"];
-    // WFH / OD / comp-off are two-stage on every brand (2026-07-21), so the
-    // interim partially_approved state must protect exactly like pending —
-    // an L1-approved request must never make its subject LOOK uncovered.
-    // (Bug found 2026-07-24: Harman's L1-approved 8 Jul WFH was invisible
-    // here and he was absent-LOP'd with "no WFH" in the note.)
-    const PROTECTED_SINGLE_STAGE_STATUSES = ["pending", "partially_approved", "approved"];
+    // covering this date — they are NOT LOP candidates. ALL request kinds
+    // use the shared ACTIVE list (pending + partially_approved + approved) —
+    // drifting per-kind copies of this list caused repeated "L1-approved
+    // request looked like no request" bugs (e.g. Harman's 8 Jul WFH).
+    const PROTECTED_LEAVE_STATUSES        = [...ACTIVE_REQUEST_STATUSES];
+    const PROTECTED_REG_STATUSES          = [...ACTIVE_REQUEST_STATUSES];
+    const PROTECTED_SINGLE_STAGE_STATUSES = [...ACTIVE_REQUEST_STATUSES];
 
     const [attendances, leaves, regs, wfhs, ods, compOffs] = await Promise.all([
       prisma.attendance.findMany({
@@ -265,22 +264,9 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     //   both applied halves' worth missing → full-day LOP
     // A leave / regularization / OD / comp-off the same day still shields.
     const WFH_FULL_MIN = 540, WFH_HALF_MIN = 270;
-    // Per-user day-length bars (2026-07-24): on a Saturday whose shift
-    // defines its own hours (satStartTime/satEndTime), the full bar is that
-    // day's length and half is half of it — a 10:00–15:00 Saturday needs
-    // 5h / 2.5h, not the weekday 9h / 4.5h. Other days keep the standard bars.
-    const hmToMin = (t: string | null | undefined): number | null => {
-      const m = /^(\d{1,2}):(\d{2})/.exec(t ?? "");
-      return m ? Number(m[1]) * 60 + Number(m[2]) : null;
-    };
-    const dayBars = (uid: number): { full: number; half: number } => {
-      if (date.getUTCDay() === 6) {
-        const sr = shiftByUser.get(uid) as any;
-        const s = hmToMin(sr?.satStartTime), e = hmToMin(sr?.satEndTime);
-        if (s !== null && e !== null && e > s) return { full: e - s, half: Math.round((e - s) / 2) };
-      }
-      return { full: WFH_FULL_MIN, half: WFH_HALF_MIN };
-    };
+    // Per-user day-length bars — shared day-rules (Saturday-aware).
+    const barsFor = (uid: number): { full: number; half: number } =>
+      dayBars(date, shiftByUser.get(uid) as any);
     // Feature start: the WFH-completion rule applies ONLY to attendance on or
     // after 2026-07-01. Earlier days keep the legacy behaviour (an approved WFH
     // blanket-shields from LOP) so historical attendance is never re-judged.
@@ -310,7 +296,7 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     }
     for (const [uid, c] of wfhCover) {
       const total = attByUser.get(uid)?.totalMinutes ?? 0;
-      const bars = dayBars(uid);
+      const bars = barsFor(uid);
       if (c.full) {
         // Full-day WFH: strict — must work the day's full bar, else full-day LOP.
         if (total >= bars.full) wfhMetIds.add(uid);
@@ -356,8 +342,8 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     for (const [uid, c] of halfLeave) {
       if (c.first && c.second) { leaveMetIds.add(uid); continue; } // both halves leave → whole day off
       const workedTotal = attByUser.get(uid)?.totalMinutes ?? 0;
-      // Half the day's bar — Saturday-length aware (see dayBars above).
-      if (workedTotal >= dayBars(uid).half) leaveMetIds.add(uid);
+      // Half the day's bar — Saturday-length aware (see barsFor above).
+      if (workedTotal >= barsFor(uid).half) leaveMetIds.add(uid);
       else leaveHalfLopIds.add(uid);
     }
 
@@ -404,7 +390,14 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     // Half-day LOP: unregularized missed clock-outs not otherwise covered by a
     // pending/approved leave / regularization / WFH / OD / comp-off. (A pending
     // regularization means the user DID act in time → protectedIds excludes it.)
-    const toHalfDayLop = missedSwipeRows.filter((a) => !protectedIds.has(a.userId));
+    // DOUBLE-SCAN guard (2026-07-29): a "missed clock-out" whose CLOSED
+    // sessions already recorded a complete day (totalMinutes ≥ the day's
+    // full bar) is a terminal artefact — e.g. a second biometric scan 30s
+    // after the real clock-out reopened the day. The person demonstrably
+    // worked the full day; never dock them for the ghost session.
+    const toHalfDayLop = missedSwipeRows.filter(
+      (a) => !protectedIds.has(a.userId) && (a.totalMinutes ?? 0) < barsFor(a.userId).full,
+    );
     if (toHalfDayLop.length > 0) {
       const upd = await prisma.attendance.updateMany({
         where: { id: { in: toHalfDayLop.map((a) => a.id) } },

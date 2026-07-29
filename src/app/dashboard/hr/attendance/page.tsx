@@ -1655,12 +1655,26 @@ export default function AttendancePage() {
                     };
                     const pendingWfhHalf   = pendingWfhRow ? pHalf(pendingWfhRow.reason) : null;
                     const pendingLeaveHalf = pendingLeaveRow ? pHalf(pendingLeaveRow.reason) : null;
+                    // ALL open half-day leaves for this date (2026-07-29): a day
+                    // can carry TWO half requests (e.g. 1st-half Sick + 2nd-half
+                    // LWP) — the label must name BOTH, not assume the other half
+                    // is "Office" from just the first row found.
+                    const pendingHalfLeaves = myLeaves.filter((l: any) => {
+                      if (l.status !== "pending" && l.status !== "partially_approved") return false;
+                      const from = String(l.fromDate).slice(0, 10);
+                      const to   = String(l.toDate).slice(0, 10);
+                      return dateIso >= from && dateIso <= to && pHalf(l.reason) !== null;
+                    });
                     const pendingSplitLabel = (() => {
                       if (!pendingWfhHalf && !pendingLeaveHalf) return null;
-                      const kind = (which: "first" | "second") =>
-                        pendingLeaveHalf === which ? (pendingLeaveRow?.leaveType?.name || "Leave")
-                        : pendingWfhHalf === which ? "WFH"
-                        : "Office";
+                      const kind = (which: "first" | "second") => {
+                        const lv = pendingHalfLeaves.find((l: any) => pHalf(l.reason) === which);
+                        if (lv) return lv.leaveType?.name || "Leave";
+                        if (pendingWfhHalf === which) return "WFH";
+                        // The other half may be covered by an APPROVED half leave.
+                        if (approvedLeave && pHalf(approvedLeave.reason) === which) return approvedLeave.leaveType?.name || "Leave";
+                        return "Office";
+                      };
                       return `1st Half ${kind("first")} · 2nd Half ${kind("second")}`;
                     })();
                     // Missed clock-out: clocked in on a past day but never clocked out.
