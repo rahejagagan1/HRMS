@@ -13,11 +13,6 @@ import { leaveMinDate } from "@/lib/hr/leave-date-rules";
 import { isWorkingDay, type ShiftWorkRule } from "@/lib/hr/shift-working-days";
 import { buildShortLeaveReason, isShortLeaveReason, shortLeaveSlot, type ShortLeaveSlot } from "@/lib/hr/short-leave";
 
-// Feature switch: show/hide the "Short (2h)" option in the apply form.
-// OFF for now (2026-07-28) — everything behind it keeps working (editing an
-// existing short leave still renders its slot UI); flip to true to re-launch.
-const SHORT_LEAVE_UI_ENABLED = false;
-
 // Decode a stored leave reason back into the form's shape + slot + clean note
 // (strips the leading [marker]). Used to pre-fill the Edit form.
 function parseLeaveShape(reason: string | null | undefined): {
@@ -469,18 +464,14 @@ export default function LeaveRequestForm({
 
           {/* Leave shape — Full / Half / Short. Half and Short both collapse to
               a single date; Half saves a [First/Second Half] marker, Short
-              saves a [Short Leave - Morning/Evening] marker (0.25 CL, 2h).
-              SHORT_LEAVE_UI_ENABLED: the Short button is HIDDEN for now per
-              HR (2026-07-28) — all short-leave logic (marker parsing, 0.25
-              debit, slot picker, API, auto-LOP excuse) stays intact; flip
-              this flag to bring the button back. */}
+              saves a [Short Leave - Morning/Evening] marker (0.25 CL, 2h). */}
           {kind === "leave" && (
             <div className="space-y-2">
-              <div className={`grid gap-2 ${SHORT_LEAVE_UI_ENABLED ? "grid-cols-3" : "grid-cols-2"}`}>
+              <div className="grid grid-cols-3 gap-2">
                 {[
                   { key: "full",  label: "Full Day",   on: dayKind === "full" },
                   { key: "half",  label: "Half Day",   on: isHalfLeave },
-                  ...(SHORT_LEAVE_UI_ENABLED ? [{ key: "short", label: "Short (2h)", on: isShortLeave }] : []),
+                  { key: "short", label: "Short (2h)", on: isShortLeave },
                 ].map((opt) => (
                   <button
                     key={opt.key}

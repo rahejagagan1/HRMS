@@ -175,6 +175,42 @@ export async function POST(req: NextRequest) {
       attnByUser.set(g.userId, bucket);
     }
 
+    // Half-day EXCUSE (2026-07-28): a `half_day` attendance status must NOT
+    // cost 0.5 salary when the other half is an APPROVED PAID half-day leave
+    // — the employee worked one half and the leave pays the other, so the day
+    // is fully paid (before this, such days were double-charged: 0.5 leave
+    // balance AND 0.5 pay). Match by exact date: single-date approved paid
+    // leaves carrying the [Half Day]/[First Half]/[Second Half] marker.
+    const halfDayRows = userIds.length ? await prisma.attendance.findMany({
+      where: { userId: { in: userIds }, date: { gte: firstDay, lte: lastDay }, status: "half_day" },
+      select: { userId: true, date: true },
+    }) : [];
+    const paidHalfLeaves = userIds.length ? await prisma.leaveApplication.findMany({
+      where: {
+        userId: { in: userIds },
+        status: "approved",
+        fromDate: { lte: lastDay }, toDate: { gte: firstDay },
+        leaveType: { isPaid: true },
+      },
+      select: { userId: true, fromDate: true, toDate: true, reason: true, totalDays: true },
+    }) : [];
+    const paidHalfByUser = new Map<number, Set<string>>();
+    for (const lv of paidHalfLeaves) {
+      const isHalf = /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
+        && Number(lv.totalDays) <= 0.5
+        && lv.fromDate.getTime() === lv.toDate.getTime();
+      if (!isHalf) continue;
+      const set = paidHalfByUser.get(lv.userId) ?? new Set<string>();
+      set.add(lv.fromDate.toISOString().slice(0, 10));
+      paidHalfByUser.set(lv.userId, set);
+    }
+    const excusedHalfByUser = new Map<number, number>();
+    for (const r of halfDayRows) {
+      if (paidHalfByUser.get(r.userId)?.has(r.date.toISOString().slice(0, 10))) {
+        excusedHalfByUser.set(r.userId, (excusedHalfByUser.get(r.userId) ?? 0) + 1);
+      }
+    }
+
     // Carry Over Leave balances → leave encashment for employees whose F&F
     // falls in this run month (part of "components ARE the F&F"). Remaining
     // days = total − used − pending; encashed at (Basic + DA) per day / 30.
@@ -239,7 +275,9 @@ export async function POST(req: NextRequest) {
       const attn = attnByUser.get(s.userId);
       const absentCount     = attn?.absent ?? 0;
       const lopCount        = attn?.lop ?? 0;
-      const halfDayCount    = attn?.half_day ?? 0;
+      // Approved paid half-day leaves neutralise the matching half_day
+      // charge — worked half + paid-leave half = fully paid day.
+      const halfDayCount    = Math.max(0, (attn?.half_day ?? 0) - (excusedHalfByUser.get(s.userId) ?? 0));
       const halfDayLopCount = attn?.half_day_lop ?? 0;
 
       const unpaidLeaves = unpaidLeavesByUser.get(s.userId) ?? [];

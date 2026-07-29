@@ -60,6 +60,11 @@ model User {
   /// Monthly case delivery target for CM/PM (denominator for delivery %). Per-manager.
   monthlyDeliveryTargetCases Int?
   isActive                   Boolean  @default(true)
+  /// HR-granted login grace after exit (2026-07-28). When set to a future
+  /// date, the user may sign in even though their last working day has
+  /// passed / they were deactivated — access ends at end of this date.
+  /// Cleared/null = no extension. Granted from the profile ⋮ menu.
+  accessExtendedUntil        DateTime?
   reportAccess               Boolean  @default(false)
   /// True when the user must walk through the first-login wizard
   /// (/onboarding) before reaching the dashboard. Set by HR at creation
