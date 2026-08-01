@@ -219,7 +219,10 @@ export default function ProfilePage() {
     if (today?.status === "weekend")           return { label: "WEEKLY OFF",     cls: "bg-slate-400/15 text-slate-600 border-slate-200 dark:border-slate-500/20" };
     if (today?.status === "missed_clock_out")  return { label: "MISSED CLOCK-OUT", cls: "bg-amber-500/10 text-amber-600 border-amber-200 dark:border-amber-500/20" };
     if (hasOpenSession)                        return { label: "CLOCKED IN",     cls: "bg-emerald-500/10 text-emerald-600 border-emerald-200 dark:border-emerald-500/20" };
-    if (today?.clockIn && totalMins >= 540)    return { label: "DAY COMPLETE",   cls: "bg-emerald-500/10 text-emerald-600 border-emerald-200 dark:border-emerald-500/20" };
+    // "Day complete" = the shift's full bar is met — read from the server's
+    // shift-derived status (present / late), which is Saturday-aware, instead of
+    // a hardcoded 9h. So a finished short Saturday reads DAY COMPLETE, not BREAK.
+    if (today?.clockIn && (today?.status === "present" || today?.status === "late")) return { label: "DAY COMPLETE",   cls: "bg-emerald-500/10 text-emerald-600 border-emerald-200 dark:border-emerald-500/20" };
     if (today?.clockIn && today?.clockOut)     return { label: "ON BREAK",       cls: "bg-slate-400/15 text-slate-700 border-slate-200 dark:border-slate-500/20" };
     return { label: "NOT IN YET", cls: "bg-red-500/10 text-red-500 border-red-200 dark:border-red-500/20" };
   })();

@@ -252,8 +252,8 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     // ── WFH completion enforcement ──────────────────────────────────────
     // An approved WFH no longer BLANKET-shields from LOP. A WFH day must be
     // WORKED like any shift, judged on the day's TOTAL worked minutes:
-    //   full-day = 540 min (9h, the same bar the UI uses)
-    //   each applied half = 270 min (4.5h) — stacking both halves needs 540.
+    //   full-day = the shift's own full-day bar (Saturday-aware, see barsFor)
+    //   each applied half = half that bar — stacking both halves needs the full.
     // "Which half" comes from the [First Half] / [Second Half] reason marker;
     // a full day has no marker.
     // Policy 2026-07-21: totals replaced the old per-half-window judging — an
@@ -263,7 +263,6 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     //   one applied half's worth missing   → half-day LOP
     //   both applied halves' worth missing → full-day LOP
     // A leave / regularization / OD / comp-off the same day still shields.
-    const WFH_FULL_MIN = 540, WFH_HALF_MIN = 270;
     // Per-user day-length bars — shared day-rules (Saturday-aware).
     const barsFor = (uid: number): { full: number; half: number } =>
       dayBars(date, shiftByUser.get(uid) as any);

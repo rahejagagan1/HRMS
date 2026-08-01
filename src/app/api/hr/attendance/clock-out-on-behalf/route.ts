@@ -5,6 +5,7 @@ import { requireAuth, serverError } from "@/lib/api-auth";
 import { parseBody } from "@/lib/validate";
 import { istTodayDateOnly } from "@/lib/ist-date";
 import { isGaganDeveloper } from "@/lib/gagan-dev";
+import { dayBars } from "@/lib/hr/day-rules";
 
 // Clock a user OUT on their behalf for a given day. Restricted to the single
 // developer account (Gagan) — see src/lib/gagan-dev. The button that calls this
@@ -45,6 +46,15 @@ export async function POST(req: NextRequest) {
     const date = body.date ? new Date(`${body.date}T00:00:00.000Z`) : istTodayDateOnly();
     const now = new Date();
     const requestedOut = body.clockOutAt ? new Date(body.clockOutAt) : now;
+
+    // Full/half bars from the target's SHIFT (Saturday-aware, via day-rules) so
+    // an on-behalf clock-out scores identically to a self / biometric clock-out.
+    const dayShiftRows = await prisma.$queryRawUnsafe<Array<{ startTime: string | null; endTime: string | null; breakMinutes: number | null; satStartTime: string | null; satEndTime: string | null; satGraceMinutes: number | null }>>(
+      `SELECT s."startTime", s."endTime", s."breakMinutes", s."satStartTime", s."satEndTime", s."satGraceMinutes"
+         FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId" WHERE us."userId" = $1`,
+      targetUserId,
+    ).catch(() => [] as any[]);
+    const dayShift = dayShiftRows[0] ?? null;
 
     type SessRow = { id: number; clockIn: Date; clockOut: Date | null };
     const result = await prisma.$transaction(async (tx) => {
@@ -87,12 +97,13 @@ export async function POST(req: NextRequest) {
       );
       const totalMinutes = Math.floor((sumRows[0]?.totalSeconds ?? 0) / 60);
 
-      // Strict 9-hour shift (same thresholds as the self clock-out route):
-      // ≥540 → present (late preserved), ≥270 → half_day, else keep.
+      // Full/half bars from the SHIFT (Saturday-aware) — same source of truth
+      // as the self clock-out route, never a hardcoded 9h/4.5h.
+      const { full, half } = dayBars(date, dayShift);
       let status = existing.status;
-      if (totalMinutes >= 540) status = existing.status === "late" ? "late" : "present";
-      else if (totalMinutes >= 270) status = "half_day";
-      const overtimeMinutes = Math.max(0, totalMinutes - 540);
+      if (totalMinutes >= full) status = existing.status === "late" ? "late" : "present";
+      else if (totalMinutes >= half) status = "half_day";
+      const overtimeMinutes = Math.max(0, totalMinutes - full);
 
       // Write exactly the same fields a self clock-out would — no note, no
       // marker — so the resulting record is indistinguishable from the user

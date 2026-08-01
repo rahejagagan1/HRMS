@@ -1197,10 +1197,14 @@ export function EmployeeTimePanel({
                 return istMin > cutoffMin;
               })();
               const missedClockOut = !!rec.clockIn && !rec.clockOut && !isToday && !rec.isRegularized && !isLeaveRow;
-              // "On break" — today, all closed sessions, day-total still < 9h.
-              // Means the user clocked out for a break but hasn't hit the
-              // 9h threshold; not yet "done for the day".
-              const isOnBreak = isToday && !openSess && sess.some((s) => s.clockOut) && !rec.isRegularized && (rec.totalMinutes || 0) < 540;
+              // "On break" — today, clocked out, but the day's full bar (per the
+              // employee's SHIFT, Saturday-aware) is NOT yet met, so they've
+              // likely just stepped out and can resume. Keyed off the server's
+              // shift-derived status (present / late = the full day is done)
+              // instead of a hardcoded 9h, so a completed SHORT Saturday (e.g.
+              // a 6h shift finished at 6h) is never shown "on break".
+              const dayComplete = rec.status === "present" || rec.status === "late";
+              const isOnBreak = isToday && !openSess && sess.some((s) => s.clockOut) && !rec.isRegularized && !dayComplete;
 
               return (
                 <tr key={rec.id} className={`border-b border-slate-100 transition-colors ${rowBg}`}>
