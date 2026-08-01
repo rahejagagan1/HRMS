@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
 import { serializeBigInt } from "@/lib/utils";
-import { parseYearMonth, istCalendarMonthRange } from "@/lib/ist-date";
+import { parseYearMonth } from "@/lib/ist-date";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 import { brandScopeUserWhere } from "@/lib/hr/brand-scope";
 
@@ -54,15 +54,22 @@ export async function GET(req: NextRequest) {
     //                same view, with rejected/cancelled rows filtered out.
     //   - "all"     — every status (history / audit trail).
     const scope = (searchParams.get("scope") || "pending").toLowerCase();
-    // Month filter ("YYYY-MM") — when present, narrows each tab's query to
-    // requests SUBMITTED within that IST calendar month. Filters on
-    // appliedAt for leave (matches the "Applied · …" stamp in the UI),
-    // createdAt for everything else. Unparseable / missing → no filter.
+    // Month filter ("YYYY-MM") — narrows each tab to requests FOR dates in
+    // that calendar month (2026-08-01; was submitted-month before): a July
+    // leave filed in August belongs under July. The leave's covered range
+    // must OVERLAP the month; regularization/WFH/OD filter on their `date`,
+    // comp-off on `workedDate`. Unparseable / missing → no filter.
+    // For-date columns are @db.Date (UTC-midnight of the IST day), so the
+    // window is plain UTC month boundaries — no IST offset shifting.
     const ymRaw = searchParams.get("month");
     const ym    = parseYearMonth(ymRaw);
-    const monthRange = ym ? istCalendarMonthRange(ym.year, ym.month) : null;
-    const leaveMonth   = monthRange ? { appliedAt: monthRange } : {};
-    const createdMonth = monthRange ? { createdAt: monthRange } : {};
+    const dateOnlyRange = ym ? {
+      gte: new Date(Date.UTC(ym.year, ym.month - 1, 1)),
+      lt:  new Date(Date.UTC(ym.year, ym.month, 1)),
+    } : null;
+    const leaveMonth   = dateOnlyRange ? { fromDate: { lt: dateOnlyRange.lt }, toDate: { gte: dateOnlyRange.gte } } : {};
+    const forDateMonth = dateOnlyRange ? { date: dateOnlyRange } : {};
+    const workedMonth  = dateOnlyRange ? { workedDate: dateOnlyRange } : {};
 
     // Brand filter (NB Media / YT Labs) — narrows every list to that
     // brand's employees so the tab badge counts on the ApprovalsPanel
@@ -138,7 +145,9 @@ export async function GET(req: NextRequest) {
           // are scalar columns already returned; this adds the POC's name.
           poc: { select: { id: true, name: true, profilePictureUrl: true } },
         },
-        orderBy: { appliedAt: "desc" },
+        // Sorted by the dates the leave is FOR (latest first), matching the
+        // for-date month filter.
+        orderBy: { fromDate: "desc" },
         take: 300,
       });
 
@@ -165,9 +174,9 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(serializeBigInt({ items: [], count: 0 }));
       }
       const rows = await prisma.attendanceRegularization.findMany({
-        where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...createdMonth },
+        where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...forDateMonth },
         include: includeUser,
-        orderBy: { createdAt: "desc" },
+        orderBy: { date: "desc" },
         take: 300,
       });
       return NextResponse.json(serializeBigInt({ items: rows, count: rows.length }));
@@ -179,31 +188,31 @@ export async function GET(req: NextRequest) {
       // partially_approved so final approvers see stage-2 items.
       const [wfhRows, odRows] = await Promise.all([
         prisma.wFHRequest.findMany({
-          where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...createdMonth },
+          where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...forDateMonth },
           include: includeUser,
-          orderBy: { createdAt: "desc" },
+          orderBy: { date: "desc" },
           take: 300,
         }),
         prisma.onDutyRequest.findMany({
-          where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...createdMonth },
+          where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...forDateMonth },
           include: includeUser,
-          orderBy: { createdAt: "desc" },
+          orderBy: { date: "desc" },
           take: 300,
         }),
       ]);
       const items = [
         ...wfhRows.map((r) => ({ ...r, _kind: "wfh" as const })),
         ...odRows.map((r)  => ({ ...r, _kind: "on_duty" as const })),
-      ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       return NextResponse.json(serializeBigInt({ items, count: items.length }));
     }
 
     if (tab === "comp_off") {
       // Comp-off also runs the L1 → L2 flow now — include partially_approved.
       const rows = await prisma.compOffRequest.findMany({
-        where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...createdMonth },
+        where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...workedMonth },
         include: includeUser,
-        orderBy: { createdAt: "desc" },
+        orderBy: { workedDate: "desc" },
         take: 300,
       });
       return NextResponse.json(serializeBigInt({ items: rows, count: rows.length }));

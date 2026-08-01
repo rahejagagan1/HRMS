@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
-import { parseYearMonth, istCalendarMonthRange } from "@/lib/ist-date";
+import { parseYearMonth } from "@/lib/ist-date";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 import { brandScopeUserWhere } from "@/lib/hr/brand-scope";
 
@@ -16,8 +16,9 @@ export const dynamic = "force-dynamic";
 //  • Manager (has direct reports)          → their team only.
 //  • Everyone else                         → forbidden.
 //
-// Optional `month=YYYY-MM` narrows counts to requests SUBMITTED within
-// that IST calendar month (appliedAt for leave, createdAt elsewhere) —
+// Optional `month=YYYY-MM` narrows counts to requests FOR dates in that
+// calendar month (leave range overlap; reg/WFH/OD `date`; comp-off
+// `workedDate`) —
 // matches the ApprovalsPanel month filter so the sub-tab badges and the
 // underlying table reflect the same window.
 export async function GET(req: NextRequest) {
@@ -57,10 +58,18 @@ export async function GET(req: NextRequest) {
     // even when the panel itself was scoped to one brand — the user
     // saw "LEAVE 26" while the table rendered only the YT Labs subset.
     const { searchParams } = new URL(req.url);
+    // For-date month window (2026-08-01) — MUST mirror ../route.ts so the
+    // badges count the same rows the table shows: leave range overlaps the
+    // month; reg/WFH/OD by `date`; comp-off by `workedDate`. @db.Date
+    // columns → plain UTC month boundaries.
     const ym = parseYearMonth(searchParams.get("month"));
-    const monthRange = ym ? istCalendarMonthRange(ym.year, ym.month) : null;
-    const leaveMonth   = monthRange ? { appliedAt: monthRange } : {};
-    const createdMonth = monthRange ? { createdAt: monthRange } : {};
+    const dateOnlyRange = ym ? {
+      gte: new Date(Date.UTC(ym.year, ym.month - 1, 1)),
+      lt:  new Date(Date.UTC(ym.year, ym.month, 1)),
+    } : null;
+    const leaveMonth   = dateOnlyRange ? { fromDate: { lt: dateOnlyRange.lt }, toDate: { gte: dateOnlyRange.gte } } : {};
+    const forDateMonth = dateOnlyRange ? { date: dateOnlyRange } : {};
+    const workedMonth  = dateOnlyRange ? { workedDate: dateOnlyRange } : {};
 
     const brandRaw = (searchParams.get("brand") || "").toLowerCase();
     const brand: "NB Media" | "YT Labs" | null =
@@ -98,16 +107,16 @@ export async function GET(req: NextRequest) {
       // count at all. Final approvers see every open row. Brand scope
       // still applies for final approvers.
       isFinalApprover
-        ? prisma.attendanceRegularization.count({ where: { ...openTwoStage, ...teamWhere, ...createdMonth } })
+        ? prisma.attendanceRegularization.count({ where: { ...openTwoStage, ...teamWhere, ...forDateMonth } })
         : Promise.resolve(0),
       prisma.wFHRequest.count({
-        where: { ...openTwoStage, ...teamWhere, ...createdMonth },
+        where: { ...openTwoStage, ...teamWhere, ...forDateMonth },
       }),
       prisma.onDutyRequest.count({
-        where: { ...openTwoStage, ...teamWhere, ...createdMonth },
+        where: { ...openTwoStage, ...teamWhere, ...forDateMonth },
       }),
       prisma.compOffRequest.count({
-        where: { ...openTwoStage, ...teamWhere, ...createdMonth },
+        where: { ...openTwoStage, ...teamWhere, ...workedMonth },
       }),
     ]);
 
