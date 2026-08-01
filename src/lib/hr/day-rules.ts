@@ -112,6 +112,85 @@ export function dayBars(date: Date, shift: DayShift): { full: number; half: numb
   return { full: DEFAULT_FULL_DAY_MIN, half: DEFAULT_HALF_DAY_MIN };
 }
 
+// ── Working-day resolution (shift-driven) ────────────────────────────
+// Whether a given calendar date is a WORKING day for a shift — the single
+// place that reads a shift's workDays + Saturday policy so reminders, crons,
+// and pages never re-implement (and drift on) "is today a work day?". Shifts
+// can change any time, so callers pass the LIVE shift row; this stays pure.
+
+const DOW_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+/** Shift fields needed to decide if a date is a working day. Loose types so
+ *  a Prisma row or an API payload both satisfy it (workDays is JSON). */
+export type WorkingDayShift = {
+  workDays?: unknown;                 // e.g. ["Mon","Tue","Wed","Thu","Fri","Sat"]
+  saturdayPolicy?: string | null;     // "all" | "alternate" | "weeks" | "dates"
+  saturdayWeeks?: number[] | null;    // for "weeks": [1,3] = 1st & 3rd Saturday
+  saturdayDates?: string[] | null;    // for "dates": ["YYYY-MM-DD", …]
+} | null | undefined;
+
+/** Normalise a shift.workDays JSON value into a Set of "Mon".."Sun". */
+function workDaySet(workDays: unknown): Set<string> {
+  let arr: unknown[] = [];
+  if (Array.isArray(workDays)) arr = workDays;
+  else if (typeof workDays === "string") { try { arr = JSON.parse(workDays); } catch { arr = []; } }
+  const map: Record<string, string> = { sun: "Sun", mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat" };
+  const s = new Set<string>();
+  for (const d of arr) {
+    const name = map[String(d).trim().toLowerCase().slice(0, 3)];
+    if (name) s.add(name);
+  }
+  return s;
+}
+
+/**
+ * True when `date` (UTC-midnight of the IST calendar day) is a WORKING day
+ * for the given shift.
+ *   • No shift assigned          → legacy default: Mon–Fri work, weekend off.
+ *   • Weekday not in workDays     → off.
+ *   • Mon–Fri (or a Sunday HR put in workDays) → working.
+ *   • Saturday                    → honour saturdayPolicy:
+ *       - "all"       every Saturday works
+ *       - "weeks"     only week-of-month ordinals in saturdayWeeks
+ *       - "dates"     only the exact dates in saturdayDates
+ *       - "alternate" every other Saturday, anchored at the user's shift
+ *                     start (pass opts.alternateAnchor = UserShift.effectiveFrom);
+ *                     without an anchor it fails OPEN (treated as working).
+ */
+export function isWorkingDayForShift(
+  date: Date,
+  shift: WorkingDayShift,
+  opts?: { alternateAnchor?: Date | string | null },
+): boolean {
+  const dow = date.getUTCDay(); // 0=Sun … 6=Sat (IST, since date is UTC-midnight of the IST day)
+  if (!shift || shift.workDays == null) return dow >= 1 && dow <= 5;
+
+  const days = workDaySet(shift.workDays);
+  if (!days.has(DOW_NAMES[dow])) return false;
+  if (dow !== 6) return true; // weekday (or an explicit Sunday) that's in workDays
+
+  // Saturday — apply the policy.
+  switch (String(shift.saturdayPolicy ?? "all")) {
+    case "all":
+      return true;
+    case "weeks":
+      return (shift.saturdayWeeks ?? []).includes(Math.ceil(date.getUTCDate() / 7));
+    case "dates":
+      return (shift.saturdayDates ?? []).includes(date.toISOString().slice(0, 10));
+    case "alternate": {
+      if (!opts?.alternateAnchor) return true; // no anchor → fail open (working)
+      const a = new Date(opts.alternateAnchor);
+      // Saturday of the anchor's week (its apply-week Saturday, which works).
+      const anchorSat = new Date(Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate()));
+      anchorSat.setUTCDate(anchorSat.getUTCDate() + ((6 - anchorSat.getUTCDay() + 7) % 7));
+      const weeks = Math.round((date.getTime() - anchorSat.getTime()) / (7 * 24 * 60 * 60 * 1000));
+      return weeks % 2 === 0; // apply-week Sat works, then every other
+    }
+    default:
+      return true;
+  }
+}
+
 /**
  * The IST minute-of-day AFTER which a first clock-in counts late.
  *   • Normal day        → shift start + grace.

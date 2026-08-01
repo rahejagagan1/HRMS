@@ -4,6 +4,7 @@ import { attendanceReminderEmail, hrLateSummaryEmail } from "@/lib/email/templat
 import { istTodayDateOnly, istTimeOnDate } from "@/lib/ist-date";
 import { getPoliciesByUser } from "@/lib/hr/notification-policy";
 import { isEmailEnabled, devEmailRecipientsClause } from "@/lib/email/toggles";
+import { isWorkingDayForShift } from "@/lib/hr/day-rules";
 
 /**
  * Comma-separated env var of emails who should never receive attendance
@@ -49,11 +50,12 @@ export async function sendMissedClockInReminders(): Promise<number> {
   }
   const today = istTodayDateOnly();
 
-  // 0. Weekend gate (Mon–Fri only). UTC day-of-week is identical to
-  //    IST day-of-week here because `today` is UTC-midnight of the
-  //    IST calendar day, so 0 = Sun, 6 = Sat in IST too.
-  const dow = new Date(today).getUTCDay();
-  if (dow === 0 || dow === 6) return 0;
+  // 0. Working-day gate is now PER-USER, driven by each employee's shift
+  //    template (workDays + Saturday policy) rather than a blanket
+  //    "skip Sat/Sun". So on a working Saturday (e.g. NB Media's alternate-
+  //    Saturday dates) the reminder fires for those employees, while YT
+  //    Labs 5-day-shift folks stay skipped — and it follows automatically
+  //    whenever HR edits a shift. See the shiftByUser filter below.
 
   // 1. Active users. Excludes exited employees whose isActive flag was never
   //    flipped (past last-working-day exit) — same test as the master-sheet
@@ -65,6 +67,21 @@ export async function sendMissedClockInReminders(): Promise<number> {
     },
     select: { id: true, name: true, email: true },
   });
+
+  // Each user's shift (workDays + Saturday policy) + their alternate-Saturday
+  // anchor, so we can ask "is today a working day for THIS employee?".
+  const userShifts = await prisma.userShift.findMany({
+    select: {
+      userId: true,
+      effectiveFrom: true,
+      shift: { select: { workDays: true, saturdayPolicy: true, saturdayWeeks: true, saturdayDates: true } },
+    },
+  });
+  const shiftByUser = new Map(userShifts.map((us) => [us.userId, us]));
+  const isWorkingToday = (userId: number): boolean => {
+    const us = shiftByUser.get(userId);
+    return isWorkingDayForShift(today, us?.shift, { alternateAnchor: us?.effectiveFrom });
+  };
 
   // 2. Pull today's attendance + leave + holiday in bulk so we don't
   //    fire one query per user. WFH / OD are intentionally NOT in this
@@ -108,6 +125,7 @@ export async function sendMissedClockInReminders(): Promise<number> {
     && !!u.email
     && !excluded.has(u.email.toLowerCase())
     && (policies.get(u.id)?.attendanceEnabled !== false)
+    && isWorkingToday(u.id)               // today must be a working day on their shift
   );
 
   let sent = 0;
@@ -171,8 +189,9 @@ export async function sendHrLateClockInSummary(
     return 0;
   }
   const today = istTodayDateOnly();
-  const dow = new Date(today).getUTCDay();
-  if (dow === 0 || dow === 6) return 0;
+  // Working-day is decided PER-USER from each shift below (not a blanket
+  // Sat/Sun skip), so a working Saturday reports the right roster and a
+  // non-working day naturally yields an empty roster → 0 emails.
 
   // Optional (floater) holidays stay working days — only full holidays
   // suppress the digest (2026-07-22).
@@ -211,14 +230,17 @@ export async function sendHrLateClockInSummary(
       },
       select: { userId: true },
     }),
-    // Each user's assigned shift — drives the per-user late cutoff.
-    // breakMinutes is repurposed as grace in this codebase (see
-    // src/app/dashboard/hr/attendance/page.tsx#L668), matching the
-    // user-facing LATE chip rule on the attendance page.
+    // Each user's assigned shift — drives BOTH the per-user late cutoff
+    // (startTime + breakMinutes-as-grace) AND the per-user working-day
+    // check (workDays + Saturday policy, anchored by effectiveFrom).
     prisma.userShift.findMany({
       select: {
         userId: true,
-        shift:  { select: { startTime: true, breakMinutes: true } },
+        effectiveFrom: true,
+        shift:  { select: {
+          startTime: true, breakMinutes: true,
+          workDays: true, saturdayPolicy: true, saturdayWeeks: true, saturdayDates: true,
+        } },
       },
     }),
   ]);
@@ -227,6 +249,8 @@ export async function sendHrLateClockInSummary(
   // without a UserShift row aren't in the map and fall back to
   // defaultCutoffIst below.
   const userCutoffByUser = new Map<number, Date>();
+  // userId → their UserShift row, for the per-user working-day check.
+  const shiftByUser = new Map(userShifts.map((us) => [us.userId, us]));
   for (const us of userShifts) {
     const st = us.shift?.startTime;
     if (!st) continue;
@@ -235,6 +259,10 @@ export async function sendHrLateClockInSummary(
     const cutoff = istTimeOnDate(today, hh, mm + grace);
     userCutoffByUser.set(us.userId, cutoff);
   }
+  const isWorkingToday = (userId: number): boolean => {
+    const us = shiftByUser.get(userId);
+    return isWorkingDayForShift(today, us?.shift, { alternateAnchor: us?.effectiveFrom });
+  };
 
   const attByUser  = new Map(todays.map((a) => [a.userId, a]));
   const onLeaveIds = new Set(leaves.map((l) => l.userId));
@@ -260,6 +288,10 @@ export async function sendHrLateClockInSummary(
     if (!u.email || excluded.has(u.email.toLowerCase())) continue;
     if (onLeaveIds.has(u.id)) continue;
     if (policies.get(u.id)?.attendanceEnabled === false) continue;
+    // Skip anyone for whom today isn't a working day on their own shift
+    // (e.g. YT Labs on a Saturday, or an NB Media off-Saturday). Keeps
+    // the absent/late roster to people actually expected in today.
+    if (!isWorkingToday(u.id)) continue;
     // Brand filter — when opts.brand is set, skip employees of other
     // brands so the roster only contains the brand we're sending to.
     if (opts.brand && buOf(u) !== opts.brand) continue;
