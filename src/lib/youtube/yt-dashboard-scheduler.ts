@@ -11,6 +11,7 @@ import {
   type SummaryTrigger,
 } from "@/lib/hr/missed-attendance-emails";
 import { maybeRunMonthlyLeaveAccrual } from "@/lib/leave-accrual";
+import { sendCeoEveningDigest } from "@/lib/hr/ceo-evening-digest";
 import { istTodayDateOnly, istDateOnlyFrom } from "@/lib/ist-date";
 
 const TICK_MS    = 60_000;
@@ -103,6 +104,7 @@ const SYNC_KEY_CLOCK_IN          = "hr_missed_clockin_last_day";
 const SYNC_KEY_HR_SUMMARY_NB     = "hr_late_summary_last_day_nb_media";
 const SYNC_KEY_HR_SUMMARY_YT     = "hr_late_summary_last_day_yt_labs";
 const SYNC_KEY_CLOCK_OUT         = "hr_missed_clockout_last_day";
+const SYNC_KEY_CEO_DIGEST        = "ceo_evening_digest_last_day";
 
 /**
  * Try to claim today's "fired" slot for the given SyncConfig key.
@@ -306,6 +308,19 @@ export function startInternalCronScheduler(): void {
                     if (n > 0) console.log(`[CronScheduler/hr] Sent ${n} missed clock-out reminder(s)`);
                 })
                 .catch((e) => logSchedulerError("hr-clock-out", e));
+        }
+
+        // CEO evening digest — 19:00 IST, same wide until-midnight window.
+        // One summary email per CEO of the day's notifications; their
+        // per-event notification emails are suppressed in dispatchEmails.
+        if (pastClockOutWindow) {
+            claimDailyGate(SYNC_KEY_CEO_DIGEST, t.day)
+                .then(async (claimed) => {
+                    if (!claimed) return;
+                    const n = await sendCeoEveningDigest();
+                    if (n > 0) console.log(`[CronScheduler/hr] Sent ${n} CEO evening digest(s)`);
+                })
+                .catch((e) => logSchedulerError("ceo-evening-digest", e));
         }
 
         // ── HR: monthly leave accrual (policy-driven: Sick + Casual + any

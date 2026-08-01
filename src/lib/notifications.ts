@@ -253,13 +253,29 @@ async function dispatchEmails(
       console.log(`[email] dispatch skipped — type "${type}" disabled in admin toggles`);
       return;
     }
+    // CEO EVENING DIGEST (2026-07-31): CEOs get NO per-event notification
+    // emails any more — their in-app notifications still flow (created
+    // before this point), and ONE summary email at 19:00 IST covers the
+    // whole day (see src/lib/hr/ceo-evening-digest.ts). This intentionally
+    // overrides even the direct-report manager exemption — the digest
+    // includes those items too. The morning attendance digest is a
+    // separate direct send and is unaffected.
+    const ceoRows = await prisma.user.findMany({
+      where: { id: { in: userIds }, orgLevel: "ceo" },
+      select: { id: true },
+    });
+    const ceoIds = new Set(ceoRows.map((r) => r.id));
+    const nonCeoUserIds = userIds.filter((id) => !ceoIds.has(id));
+    if (nonCeoUserIds.length === 0) return;
+    const nonCeoExempt = exemptUserIds?.filter((id) => !ceoIds.has(id));
+
     const content = buildEmailFor(type, title, body, emailData);
     if (!content) return;
     // Per-role filter: drops recipients whose role-specific override
     // for this email kind is OFF (e.g. "stop emailing the CEO about
     // leave"). exemptUserIds bypasses the filter for direct-report
-    // CEOs — see emailsForUserIdsFiltered.
-    const to = await emailsForUserIdsFiltered(userIds, type as any, { exemptUserIds });
+    // managers — see emailsForUserIdsFiltered.
+    const to = await emailsForUserIdsFiltered(nonCeoUserIds, type as any, { exemptUserIds: nonCeoExempt });
     if (to.length === 0) return;
     // Don't await — emails go out in the background.
     void sendEmail({ to, content });

@@ -14,8 +14,10 @@
 //   • Shared secret (HIKVISION_WEBHOOK_KEY) — required in production; compared
 //     in constant time. In dev (NODE_ENV !== production) the endpoint is open
 //     so a LAN test needs no env setup.
-//   • Punch time is clamped to ±15 min of now, so a forged/stale dateTime
-//     can't backdate attendance.
+//   • Punch time is accepted only for the current IST day (future-dated and
+//     previous-day events are dropped), so a forged/stale dateTime can't
+//     backdate attendance to another day. A same-day punch delayed by a
+//     network drop IS kept — the recorder treats the earliest as clock-in.
 //   • Device-serial pin (HIKVISION_DEVICE_SERIAL) is a HYGIENE filter only —
 //     a serial can be spoofed; real device identity should come from TLS /
 //     reverse-proxy IP allowlist. Not relied on for auth.
@@ -25,11 +27,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { recordDevicePunch } from "@/lib/hr/device-punch";
 import { publishPunch } from "@/lib/realtime/attendance-bus";
+import { istDateOnlyFrom, istTodayDateOnly } from "@/lib/ist-date";
 
 export const dynamic = "force-dynamic";
 export const runtime  = "nodejs";
 
-const CLOCK_SKEW_MS = 15 * 60_000;
+// A punch dated further into the FUTURE than this is dropped (wrong device
+// clock / forgery). PAST punches are judged by IST calendar day, not by a
+// tight window — a same-day punch delayed by a network drop must still count.
+const FUTURE_SKEW_MS = 15 * 60_000;
 
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a, "utf8");
@@ -110,18 +116,28 @@ async function handlePunch(req: NextRequest) {
   // status, heartbeats, tamper, failed/unknown reads carry no employee no.
   if (!ace || !employeeNo) return NextResponse.json({ ok: true, ignored: "no-employee" });
 
-  // Only act on LIVE punches (event time within ±15 min of now). The
-  // terminal buffers events while it has no destination and flushes the
-  // whole backlog on first connect — those carry old timestamps and must
-  // NOT be recorded (they'd pollute today's attendance). Future-dated
-  // events (clock skew / forgery) are dropped too. We still return 200 so
-  // the device clears them from its buffer instead of retrying forever.
+  // Judge the punch by CALENDAR DAY, not a tight live-window. The terminal
+  // buffers events while offline and flushes them on reconnect, so a punch
+  // made this morning during a network drop can arrive many minutes late — it
+  // MUST still count. Rules:
+  //   • same IST day  → accept (a delayed-but-real punch; the recorder pulls
+  //                      the clock-in back if it beats a later one).
+  //   • previous day  → drop (a real offline backlog must not touch old dates).
+  //   • future-dated  → drop (wrong device clock / forgery).
+  // We still return 200 in every case so the device clears the event from its
+  // buffer instead of retry-storming.
   const dtRaw = payload.dateTime ?? ace.time ?? ace.dateTime ?? null;
   const eventAt = dtRaw ? new Date(dtRaw) : null;
   const haveValidTime = !!eventAt && !Number.isNaN(eventAt.getTime());
-  if (haveValidTime && Math.abs(eventAt!.getTime() - Date.now()) > CLOCK_SKEW_MS) {
-    console.warn(`[hikvision] ignoring non-live event emp=${employeeNo} time=${dtRaw}`);
-    return NextResponse.json({ ok: true, ignored: "stale-or-future" });
+  if (haveValidTime) {
+    if (eventAt!.getTime() - Date.now() > FUTURE_SKEW_MS) {
+      console.warn(`[hikvision] ignoring future event emp=${employeeNo} time=${dtRaw}`);
+      return NextResponse.json({ ok: true, ignored: "future" });
+    }
+    if (istDateOnlyFrom(eventAt!).getTime() !== istTodayDateOnly().getTime()) {
+      console.warn(`[hikvision] ignoring prev-day event emp=${employeeNo} time=${dtRaw}`);
+      return NextResponse.json({ ok: true, ignored: "stale-prev-day" });
+    }
   }
   const at = haveValidTime ? eventAt! : new Date();
 
