@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { requireAuth, isHRAdmin, serverError } from "@/lib/api-auth";
 import { canViewDoorEntryLog } from "@/lib/access";
 import { istTodayDateOnly } from "@/lib/ist-date";
+import { dayBars } from "@/lib/hr/day-rules";
 
 // GET /api/hr/attendance?userId=X&month=2026-04
 export async function GET(req: NextRequest) {
@@ -52,6 +53,16 @@ export async function GET(req: NextRequest) {
       toDate   = new Date(Date.UTC(y, m + 1, 0));
     }
 
+    // The viewer's shift (with the sat* columns day-rules needs) so status is
+    // re-derived against the SHIFT's own full/half bars (Saturday-aware) — never
+    // a hardcoded 9h/4.5h. Raw SQL so a stale generated client can't hide sat*.
+    const dayShiftRows = await prisma.$queryRawUnsafe<Array<{ startTime: string | null; endTime: string | null; breakMinutes: number | null; satStartTime: string | null; satEndTime: string | null; satGraceMinutes: number | null }>>(
+      `SELECT s."startTime", s."endTime", s."breakMinutes", s."satStartTime", s."satEndTime", s."satGraceMinutes"
+         FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId" WHERE us."userId" = $1`,
+      targetUserId,
+    ).catch(() => [] as any[]);
+    const dayShift = dayShiftRows[0] ?? null;
+
     const records = await prisma.attendance.findMany({
       where: { userId: targetUserId, date: { gte: fromDate, lte: toDate } },
       orderBy: { date: "asc" },
@@ -89,7 +100,7 @@ export async function GET(req: NextRequest) {
     //
     // Open sessions (no clockOut) are skipped — that's "live time" the
     // client renders on top of the stored snapshot, not committed work.
-    function rederive(sess: SessRow[], existingStatus: string): { totalMinutes: number; status: string } {
+    function rederive(sess: SessRow[], existingStatus: string, recDate: Date): { totalMinutes: number; status: string } {
       let secs = 0;
       for (const s of sess) {
         if (!s.clockOut) continue;
@@ -104,9 +115,13 @@ export async function GET(req: NextRequest) {
         || existingStatus === "half_day"
         || existingStatus === "missed_clock_out";
       if (!isClockStatus) return { totalMinutes, status: existingStatus };
+      // Full/half bars come from the employee's SHIFT (Saturday-aware, via the
+      // shared day-rules) — NOT a hardcoded 9h/4.5h. This is what a short
+      // Saturday needs: a completed 6h Saturday reads as present, not half-day.
+      const { full, half } = dayBars(recDate, dayShift);
       let status = existingStatus;
-      if      (totalMinutes >= 540) status = existingStatus === "late" ? "late" : "present";
-      else if (totalMinutes >= 270) status = "half_day";
+      if      (totalMinutes >= full) status = existingStatus === "late" ? "late" : "present";
+      else if (totalMinutes >= half) status = "half_day";
       return { totalMinutes, status };
     }
 
@@ -140,7 +155,7 @@ export async function GET(req: NextRequest) {
 
     const recordsWithSessions = records.map((r) => {
       const sess = sessionsByAttendance.get(r.id) ?? [];
-      const fixed = rederive(sess, r.status);
+      const fixed = rederive(sess, r.status, r.date);
       const base = { ...r, totalMinutes: fixed.totalMinutes, status: fixed.status, sessions: sess };
       return canSeeDoor ? { ...base, doorEntries: doorByDate.get(istDateKey(r.date)) ?? [] } : base;
     });
@@ -197,7 +212,7 @@ export async function GET(req: NextRequest) {
           ORDER BY "clockIn" ASC`,
         todayRecord.id,
       );
-      const fixed = rederive(todaySessions, todayRecord.status);
+      const fixed = rederive(todaySessions, todayRecord.status, todayRecord.date);
       todayRecordWithSessions = {
         ...todayRecord,
         totalMinutes: fixed.totalMinutes,
