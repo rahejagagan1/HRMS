@@ -13,9 +13,6 @@ export async function GET(req: NextRequest) {
     const self = session!.user as any;
     const { searchParams } = new URL(req.url);
     const isAdmin = isHRAdmin(self);
-    // Door-entry log (mid-day re-entries) is gated to managers / HR / CEO /
-    // devs. Regular employees never receive it in the payload.
-    const canSeeDoor = canViewDoorEntryLog(self);
 
     // Resolve dbId — fallback to DB lookup by email if session doesn't have it
     let myDbId = self.dbId;
@@ -28,6 +25,14 @@ export async function GET(req: NextRequest) {
     const targetUserId = isAdmin
       ? parseInt(searchParams.get("userId") || String(myDbId))
       : myDbId;
+
+    // Door-entry log (every biometric scan / mid-day re-entry). Privileged
+    // viewers (managers / HR / CEO / devs) may see it for anyone; and EVERY
+    // employee may see it for their OWN record (targetUserId === myDbId), so a
+    // person's self-service attendance shows the same punch log HR sees. A
+    // non-admin's targetUserId is always forced to self above, so this never
+    // exposes another person's log.
+    const canSeeDoor = canViewDoorEntryLog(self) || targetUserId === myDbId;
 
     const month = searchParams.get("month");
     const fromStr = searchParams.get("from");  // YYYY-MM-DD (inclusive)
