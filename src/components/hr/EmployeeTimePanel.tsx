@@ -1243,7 +1243,11 @@ export function EmployeeTimePanel({
                           pending, which used to read as already-approved). */}
                       {hasPendingAny ? <span className="inline-flex items-center rounded bg-[#008CFF]/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[#008CFF]">Pending</span> : null}
                       {/* New tags (matches Me-section) */}
-                      {isLop ? <span className="inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700">{isHalfDayLop ? "½ Day LOP" : "LOP"}</span> : null}
+                      {/* Waived (isRegularized via the audited LOP-waive flow) →
+                          the penalty no longer charges in payroll, so don't show
+                          the red LOP chip for it — show a calm "LOP waived". */}
+                      {isLop && !rec.isRegularized ? <span className="inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700">{isHalfDayLop ? "½ Day LOP" : "LOP"}</span> : null}
+                      {isLop && rec.isRegularized ? <span title="Penalty waived — this day is fully paid" className="inline-flex items-center rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-700">LOP waived</span> : null}
                       {/* Under-9h day that clocked out but wasn't regularised —
                           payroll counts it as ½ day (0.5 LOP). Surface it loudly
                           so HR doesn't mistake the "completed punch" ✓ for a full
@@ -1256,7 +1260,18 @@ export function EmployeeTimePanel({
                           ? <span title="Worked a half day — the other half is an approved paid half-day leave, so the day is fully paid" className="inline-flex items-center rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-700">½ Half day</span>
                           : <span title="Worked under 9h — counts as ½ day (0.5 LOP) in payroll unless regularized" className="inline-flex items-center gap-0.5 rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700"><AlertCircle size={10} strokeWidth={2.5} /> ½ Half day</span>
                       ) : null}
-                      {missedClockOut ? <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span> : null}
+                      {/* Unresolved missed clock-out: payroll now REPRICES these
+                          at generate time (0.5 day) even if the auto-LOP job
+                          never converted the status — say so on the chip, so
+                          the badge and the payslip can't tell different
+                          stories. Rows auto-LOP already converted carry the
+                          ½ Day LOP chip above instead — keep those as plain
+                          "Missed" to avoid double-charging language. */}
+                      {missedClockOut ? (
+                        rec.status === "missed_clock_out"
+                          ? <span title="Missed clock-out — payroll charges ½ day unless the day is regularized, waived, or covered by an approved request" className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"><AlertCircle size={10} strokeWidth={2.5} /> Missed · ½ day</span>
+                          : <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span>
+                      ) : null}
                       {isLateFirstIn && !!rec.clockIn && !rec.isRegularized && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
                       {isOnBreak ? <span className="inline-flex items-center rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">On break</span> : null}
                     </div>
@@ -1394,7 +1409,7 @@ export function EmployeeTimePanel({
                             return (
                               <span
                                 className="text-[12.5px] italic text-amber-700"
-                                title="Clocked in but no clock-out recorded — regularization needed"
+                                title="Clocked in but no clock-out recorded — counts as ½ day in payroll unless regularized or waived"
                               >
                                 Incomplete
                               </span>

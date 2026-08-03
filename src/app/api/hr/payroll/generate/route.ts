@@ -4,6 +4,7 @@ import { requireAuth, canViewSalary, serverError } from "@/lib/api-auth";
 import { normaliseBrandParam } from "@/lib/hr/brand-scope";
 import { readBrandStatus, materializeBrandStatus } from "@/lib/hr/payroll-run-status";
 import { getMonthSalary } from "@/lib/hr/salary-periods";
+import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay } from "@/lib/hr/lop-integrity";
 
 // POST /api/hr/payroll/generate — produce draft payslips for a payroll run.
 // Math model:
@@ -162,12 +163,17 @@ export async function POST(req: NextRequest) {
     // bucketed per user into Maps the loop reads as O(1) lookups.
     const userIds = activeStructures.map(s => s.userId);
 
+    // isRegularized=false: an approved regularization / audited LOP waive
+    // clears the penalty — a regularized row must never charge, whatever
+    // status string it carries. (Normal flow already rewrites the status on
+    // approval, so this filter only bites for the explicit waive path.)
     const attnGroups = userIds.length ? await prisma.attendance.groupBy({
       by: ["userId", "status"],
       where: {
         userId: { in: userIds },
         date:   { gte: firstDay, lte: lastDay },
         status: { in: ["absent", "lop", "half_day", "half_day_lop"] },
+        isRegularized: false,
       },
       _count: { _all: true },
     }) : [];
@@ -214,7 +220,7 @@ export async function POST(req: NextRequest) {
 
     // Carry Over Leave balances → leave encashment for employees whose F&F
     // falls in this run month (part of "components ARE the F&F"). Remaining
-    // days = total − used − pending; encashed at (Basic + DA) per day / 30.
+    // days = total − used − pending; encashed at (Basic + DA) / days-in-month.
     const carryByUser = new Map<number, number>();
     try {
       const carryType = await prisma.leaveType.findFirst({
@@ -268,6 +274,25 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ── LOP integrity (2026-08-03) ─────────────────────────────────────
+    // Unresolved `missed_clock_out` rows used to be priced 0 here — the
+    // status was assumed to have been converted by the auto-LOP job before
+    // payroll. That assumption broke (aged-out scan window, out-of-band
+    // status reverts), silently turning penalised days into free days. Now
+    // payroll REPRICES them itself via the shared engine, so the stored
+    // status string is no longer load-bearing for money. Tampered rows
+    // (penalty note without the penalty status) ride along in the response
+    // so the run UI can surface them.
+    const missedSwipeCharges = await priceMissedSwipes({ userIds, firstDay, lastDay });
+    const missedSwipeByUser = new Map<number, number>();
+    for (const c of missedSwipeCharges) {
+      if (c.charge > 0) missedSwipeByUser.set(c.userId, (missedSwipeByUser.get(c.userId) ?? 0) + c.charge);
+    }
+    const tamperedRows = await findTamperedRows({ firstDay, lastDay, userIds });
+    // Shift work-rules so unpaid-leave days below count off each employee's
+    // OWN calendar (working Saturdays included), not a blanket Mon–Fri.
+    const shiftCtxByUser = await shiftContextForUsers(userIds);
+
     let totalNetPay = 0, totalCTC = 0, skipped = 0;
 
     const payslipsData: any[] = [];
@@ -310,13 +335,16 @@ export async function POST(req: NextRequest) {
         const cur   = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
         const stop  = new Date(Date.UTC(end.getUTCFullYear(),   end.getUTCMonth(),   end.getUTCDate()));
         while (cur.getTime() <= stop.getTime()) {
-          const dow = cur.getUTCDay();
-          if (dow !== 0 && dow !== 6) unpaidLeaveDays += perDay;
+          // Shift-aware: an LWP on the employee's WORKING Saturday charges
+          // like any working day (the old blanket dow≠0/6 check let a
+          // working-Saturday LWP slip through unpaid-leave for free).
+          if (isPayrollWorkingDay(cur, shiftCtxByUser.get(s.userId))) unpaidLeaveDays += perDay;
           cur.setUTCDate(cur.getUTCDate() + 1);
         }
       }
 
-      const lopDays    = absentCount + lopCount + (halfDayCount + halfDayLopCount) * 0.5 + unpaidLeaveDays;
+      const lopDays    = absentCount + lopCount + (halfDayCount + halfDayLopCount) * 0.5 + unpaidLeaveDays
+        + (missedSwipeByUser.get(s.userId) ?? 0);
       // Cap the paid-day ceiling at the last working day for anyone exiting
       // this run month — days after the LWD are not worked, so they're unpaid.
       // (LWD in a later month → full month; no exit → full month.)
@@ -351,11 +379,13 @@ export async function POST(req: NextRequest) {
       const adhocPay  = adhocPayByUser.get(s.userId) || 0;
       const adhocDed  = adhocDedByUser.get(s.userId) || 0;
       // Leave encashment — only for employees whose F&F is THIS month (last
-      // working day in the run month). (Basic + DA) per day / 30 × carry-over
-      // days. Part of "components ARE the F&F"; regular months add nothing.
+      // working day in the run month). (Basic + DA) per day × carry-over
+      // days, with per-day = monthly / real days in the run month (28-31),
+      // same denominator as the salary proration. Part of "components ARE
+      // the F&F"; regular months add nothing.
       const isFnFMonth = !!lwd && lwd.getTime() >= firstDay.getTime() && lwd.getTime() <= lastDay.getTime();
       const carryDays  = isFnFMonth ? (carryByUser.get(s.userId) || 0) : 0;
-      const leaveEncashment = carryDays > 0 ? ((basic + da) / 12 / 30) * carryDays : 0;
+      const leaveEncashment = carryDays > 0 ? ((basic + da) / 12 / daysInMonth) * carryDays : 0;
 
       // Mid-month salary revision: if a prior structure covered earlier days of
       // this run month, pay each day-range at its own rate (blended monthly
@@ -448,6 +478,15 @@ export async function POST(req: NextRequest) {
       totalNetPay: totalNetPay.toFixed(2),
     });
 
-    return NextResponse.json({ run: updated, payslipsGenerated: payslipsData.length, skipped });
+    return NextResponse.json({
+      run: updated, payslipsGenerated: payslipsData.length, skipped,
+      // Data-integrity trace: what the missed-swipe repricing charged and any
+      // rows whose stored status contradicts their own penalty note. The run
+      // UI surfaces these; they're also in the pre-check (attendance-summary).
+      integrity: {
+        missedSwipes: missedSwipeCharges,
+        tampered: tamperedRows,
+      },
+    });
   } catch (e) { return serverError(e, "POST /api/hr/payroll/generate"); }
 }

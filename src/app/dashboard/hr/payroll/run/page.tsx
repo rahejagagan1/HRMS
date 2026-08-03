@@ -3884,18 +3884,40 @@ function lopReasonClass(reason: string): string {
 
 function LopSummarySubStep({ year, month0, monthLabel, brand }: { year: number; month0: number; monthLabel: string; brand: "NB Media" | "YT Labs" }) {
   const url = `/api/hr/payroll/attendance-summary?month=${month0}&year=${year}&kind=lop&brand=${encodeURIComponent(brand)}`;
-  const { data } = useSWR<{ items: LopItem[] }>(url, fetcher);
+  const { data } = useSWR<{ items: LopItem[]; warnings?: { userId: number; userName: string; date: string; kind: string; detail: string }[] }>(url, fetcher);
   const [q, setQ] = useState("");
   const items = (data?.items ?? []).filter((r) => matchesSearch(r, q));
+  const warnings = data?.warnings ?? [];
   // Which employee's date-level breakdown is expanded (one at a time).
   const [expanded, setExpanded] = useState<number | null>(null);
   return (
     <>
       <h4 className="text-[15px] font-semibold text-slate-800 mb-3">Loss of Pay</h4>
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
-        Per-employee LOP for {monthLabel}: absent + auto-LOP days + 0.5 × half-days + unpaid-leave (LWP) days. The engine subtracts these from paid days when computing the payslip.
+        Per-employee LOP for {monthLabel}: absent + auto-LOP days + 0.5 × half-days + unpaid-leave (LWP) days + unregularized missed clock-outs (0.5 each). The engine subtracts these from paid days when computing the payslip.
         <span className="ml-1 text-slate-500">Click a row to see the exact dates and why each day is LOP.</span>
       </p>
+      {/* Data-integrity warnings from the shared LOP engine: days awaiting a
+          pending decision, stale statuses, and rows whose penalty note
+          contradicts their status (changed outside the app). Resolve these
+          BEFORE generating — they're exactly the cases that used to slip
+          through as silent free days or phantom charges. */}
+      {warnings.length > 0 && (
+        <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="mb-1.5 text-[12px] font-semibold text-amber-800">
+            {warnings.length} attendance {warnings.length === 1 ? "issue needs" : "issues need"} review before generating
+          </p>
+          <ul className="space-y-1">
+            {warnings.map((w, i) => (
+              <li key={i} className="text-[12px] text-amber-800">
+                <span className="font-medium">{w.userName}</span>
+                <span className="text-amber-600"> · {fmtLopDate(w.date)} · </span>
+                {w.detail}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee Number", "Employee Name", "Absent", "Half-Days", "LWP", "Final LOP"]}>
         {items.length === 0 ? (
