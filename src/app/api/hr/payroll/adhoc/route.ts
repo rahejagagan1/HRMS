@@ -155,9 +155,10 @@ export async function POST(req: NextRequest) {
 
     // "Advance Salary" (NB Media relieving top-up): HR sends a number of
     // `days` instead of an amount. We compute it server-side from the
-    // employee's CTC at (CTC / 12) / 30 per day so the rate is authoritative
-    // (can't be spoofed from the client). It's always booked as a normal
-    // adhoc PAYMENT so the payroll engine adds it to gross unchanged.
+    // employee's CTC at (CTC / 12) / days-in-the-advanced-month per day so
+    // the rate is authoritative (can't be spoofed from the client). It's
+    // always booked as a normal adhoc PAYMENT so the payroll engine adds it
+    // to gross unchanged.
     const daysRaw = body?.days;
     const hasDays = daysRaw !== undefined && daysRaw !== null && String(daysRaw).trim() !== "";
     const days = hasDays ? Number(daysRaw) : null;

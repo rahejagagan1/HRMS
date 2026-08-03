@@ -26,16 +26,30 @@ function numOrUndef(v: unknown): number | undefined {
 export type ExitSettlementResult = {
   Basic: number; HRA: number; DearnessAllowance: number; ConveyanceAllowance: number;
   MedicalAllowance: number; SpecialAllowance: number; ProvidentFund: number;
-  LeaveEncashmentAmount: number; AdvanceSalaryAmount: number;
+  LeaveEncashmentAmount: number; BonusAmount: number; AdvanceSalaryAmount: number;
   totalEarnings: number; totalDeductions: number; net: number;
 };
 
 export function computeExitSettlement(cf: ExitSettlementFields): ExitSettlementResult {
   const annual      = num(cf.AnnualPackage);
-  const workingDays = num(cf.WorkingDays);
+  // WorkingDays: BLANK → full month (legacy letters keep rendering as
+  // before), but an EXPLICIT 0 → zero days worked in the F&F month, so every
+  // prorated component (Basic/HRA/DA/Conv/Medical/Special/PF) collapses to 0
+  // and the statement pays only the non-prorated lines (Leave Encashment,
+  // Bonus, Advance Salary). Without this, a 0 fell into the blank fallback
+  // and printed a FULL month's salary for someone who worked zero days.
+  const wdEntered   = numOrUndef(cf.WorkingDays);
+  const workingDays = Math.max(0, wdEntered ?? 0);
   const enablePf    = String(cf.EnablePf ?? "false") === "true";
   const monthly     = annual > 0 ? annual / 12 : 0;
-  const proRata     = workingDays > 0 ? (workingDays / 30) : 1; // 1 = full month
+  // Pro-ration denominator = the real number of days in the F&F (exit) month
+  // (28/29/30/31), matching how the payslip engine prorates (paidDays /
+  // daysInMonth). DaysInMonth is auto-filled from the employee's exit month;
+  // when absent/invalid we fall back to the legacy 30-day convention so old
+  // letters re-render unchanged.
+  const dimRaw      = num(cf.DaysInMonth);
+  const daysInMonth = dimRaw >= 28 && dimRaw <= 31 ? dimRaw : 30;
+  const proRata     = wdEntered === undefined ? 1 : workingDays / daysInMonth; // blank = full month
 
   // Full-month monetary values per the offer-letter 50/20/10/7.5 split.
   const mBasic = monthly * 0.50;
@@ -66,9 +80,11 @@ export function computeExitSettlement(cf: ExitSettlementFields): ExitSettlementR
     SpecialAllowance:    mSpecial * proRata,
   };
 
-  // Leave encashment: (Basic + DA) / 30 × days, full-month Basic + DA, NOT pro-rated.
+  // Leave encashment: (Basic + DA) / daysInMonth × days — full-month Basic +
+  // DA, NOT pro-rated by WorkingDays. Same per-day denominator as payroll
+  // generate's encashment ((basic+da)/12/daysInMonth), so statement == payslip.
   const leDays = num(cf.LeaveEncashmentDays);
-  const dailyBasicDa = (mBasic + mDA) / 30;
+  const dailyBasicDa = (mBasic + mDA) / daysInMonth;
   const calcLE = leDays > 0 ? dailyBasicDa * leDays : 0;
 
   const final = {
@@ -87,14 +103,19 @@ export function computeExitSettlement(cf: ExitSettlementFields): ExitSettlementR
   // from the adhoc entries, not recomputed here.
   const advanceSalary = num(cf.AdvanceSalaryAmount);
 
+  // Bonus payable with the F&F — rupee amount taken as-is (auto-filled from
+  // the employee's due bonuses effective in the exit month; HR-editable).
+  // Mirrors the payslip, where the engine adds due_future bonuses to gross.
+  const bonusAmount = num(cf.BonusAmount);
+
   const totalEarnings = final.Basic + final.HRA + final.MedicalAllowance +
                         final.ConveyanceAllowance + final.SpecialAllowance +
                         final.DearnessAllowance + final.LeaveEncashmentAmount +
-                        advanceSalary;
+                        bonusAmount + advanceSalary;
   // Interns are paid a flat stipend — no statutory deductions (PT / PF).
   const isIntern = String(cf.SalaryType ?? "").toLowerCase() === "intern";
   const totalDeductions = isIntern ? 0 : (num(cf.ProfessionalTax) + final.ProvidentFund);
   const net = totalEarnings - totalDeductions;
 
-  return { ...final, AdvanceSalaryAmount: advanceSalary, totalEarnings, totalDeductions, net };
+  return { ...final, BonusAmount: bonusAmount, AdvanceSalaryAmount: advanceSalary, totalEarnings, totalDeductions, net };
 }
