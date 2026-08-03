@@ -1135,6 +1135,15 @@ export function EmployeeTimePanel({
               };
               const isSplitDay = !!(leaveHalfDir || wfhHalfDir);
               const splitLabel = isSplitDay ? `1st Half ${halfKind("first")} · 2nd Half ${halfKind("second")}` : null;
+              // An APPROVED PAID half-day leave pays the non-worked half, so a
+              // `half_day` attendance row is a fully-paid day — payroll's
+              // half-day excuse (generate route) skips the 0.5 LOP. Drives the
+              // softer ½-day chips below so the employee isn't shown a pay-cut
+              // warning for a day that costs them nothing.
+              const paidHalfLeaveApproved = (["first", "second"] as const).some((h) => {
+                const lv = halfLeaveFor(h);
+                return !!lv && lv.status === "approved" && lv.leaveType?.isPaid !== false;
+              });
 
               // Admins can regularize any past/today row that doesn't already
               // have a regularization in flight — including leave days (employee
@@ -1242,7 +1251,11 @@ export function EmployeeTimePanel({
                       {/* ALL factual tags show together (2026-07-29) —
                           pending requests never hide them; only an approved
                           regularization (isRegularized) clears the day. */}
-                      {rec.status === "half_day" && !isToday ? <span title="Worked under 9h — counts as ½ day (0.5 LOP) in payroll unless regularized" className="inline-flex items-center gap-0.5 rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700"><AlertCircle size={10} strokeWidth={2.5} /> ½ Half day</span> : null}
+                      {rec.status === "half_day" && !isToday ? (
+                        paidHalfLeaveApproved
+                          ? <span title="Worked a half day — the other half is an approved paid half-day leave, so the day is fully paid" className="inline-flex items-center rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-700">½ Half day</span>
+                          : <span title="Worked under 9h — counts as ½ day (0.5 LOP) in payroll unless regularized" className="inline-flex items-center gap-0.5 rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700"><AlertCircle size={10} strokeWidth={2.5} /> ½ Half day</span>
+                      ) : null}
                       {missedClockOut ? <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span> : null}
                       {isLateFirstIn && !!rec.clockIn && !rec.isRegularized && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
                       {isOnBreak ? <span className="inline-flex items-center rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">On break</span> : null}
@@ -1471,6 +1484,18 @@ export function EmployeeTimePanel({
                       >
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                         Reg.
+                      </span>
+                    ) : rec.status === "half_day" && !isToday && paidHalfLeaveApproved ? (
+                      // Half worked + approved paid half-day leave = fully paid
+                      // day (payroll's half-day excuse skips the 0.5 LOP). Show
+                      // a calm violet chip, not the orange pay-cut warning —
+                      // nothing here needs regularizing.
+                      <span
+                        title="Half day worked — the other half is an approved paid half-day leave, so the day is fully paid"
+                        className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-700 ring-1 ring-inset ring-violet-200"
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+                        ½ Day
                       </span>
                     ) : rec.status === "half_day" && !isToday ? (
                       // Clocked out under 9h and not regularised → payroll docks

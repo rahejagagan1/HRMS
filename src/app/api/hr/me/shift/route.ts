@@ -31,6 +31,7 @@ export async function GET() {
       satEndTime: string | null;
       satGraceMinutes: number | null;
       startTime: string | null;
+      endTime: string | null;
       breakMinutes: number | null;
       effectiveFrom: Date;
       shiftCreatedAt: Date;
@@ -46,7 +47,7 @@ export async function GET() {
       `SELECT s."workDays", s."saturdayPolicy", s."saturdayWeeks",
               COALESCE(s."saturdayDates", '{}') AS "saturdayDates",
               s."satStartTime", s."satEndTime", s."satGraceMinutes",
-              s."startTime", s."breakMinutes", us."effectiveFrom",
+              s."startTime", s."endTime", s."breakMinutes", us."effectiveFrom",
               s."createdAt" AS "shiftCreatedAt"
          FROM "UserShift" us
          JOIN "Shift" s ON s.id = us."shiftId"
@@ -67,6 +68,12 @@ export async function GET() {
         satEndTime:     r.satEndTime,
         satGraceMinutes: r.satGraceMinutes,
         startTime:      r.startTime,
+        // endTime feeds the first-half-leave LATE cutoff on the employee's
+        // own attendance view: with a first-half leave/WFH the employee is
+        // only expected from the shift MID-POINT, and the midpoint can't be
+        // computed without the end time (2026-07-28 — self-view wrongly
+        // stamped LATE on a 12:20 PM arrival after a first-half Sick Leave).
+        endTime:        r.endTime,
         breakMinutes:   r.breakMinutes,
         // Shift-level anchor for alternate-Saturday phase — see isWorkingDay.
         createdAt:      r.shiftCreatedAt,

@@ -61,30 +61,52 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
 
   // LOP within the WORKED window [1st .. LWD] only. (Days after the LWD are
   // unpaid by virtue of the proration base being the full month, not LOP.)
-  const [absent, lop, half, halfLop] = await Promise.all([
+  const [absent, lop, halfRows, halfLop] = await Promise.all([
     prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "absent" } }),
     prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "lop" } }),
-    prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "half_day" } }),
+    prisma.attendance.findMany({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "half_day" }, select: { date: true } }),
     prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "half_day_lop" } }),
   ]);
 
+  // Single-date half-day leave test — same rule as payroll/generate, so the
+  // F&F numbers can never drift from the payslip's.
+  const isHalfDayLeave = (lv: { fromDate: Date; toDate: Date; reason: string | null; totalDays: unknown }) =>
+    /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
+    && Number(lv.totalDays) <= 0.5
+    && lv.fromDate.getTime() === lv.toDate.getTime();
+
   // Unpaid (LWP) leave weekdays within the worked window — same as payroll.
+  // A half-day LWP docks 0.5, not a full day.
   const unpaidLeaves = await prisma.leaveApplication.findMany({
     where: { userId: exit.userId, status: "approved", fromDate: { lte: lwd }, toDate: { gte: firstDay }, leaveType: { isPaid: false } },
-    select: { fromDate: true, toDate: true },
+    select: { fromDate: true, toDate: true, reason: true, totalDays: true },
   });
   let unpaidLeaveDays = 0;
   for (const lv of unpaidLeaves) {
+    const perDay = isHalfDayLeave(lv) ? 0.5 : 1;
     const start = lv.fromDate > firstDay ? lv.fromDate : firstDay;
     const end = lv.toDate < lwd ? lv.toDate : lwd;
     const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
     const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
     while (cur.getTime() <= stop.getTime()) {
       const dow = cur.getUTCDay();
-      if (dow !== 0 && dow !== 6) unpaidLeaveDays += 1;
+      if (dow !== 0 && dow !== 6) unpaidLeaveDays += perDay;
       cur.setUTCDate(cur.getUTCDate() + 1);
     }
   }
+
+  // Half-day EXCUSE — same rule as payroll/generate: a half_day attendance
+  // row is not double-docked when the other half of that date is covered by
+  // an approved half-day leave (paid half → that half costs nothing; unpaid
+  // half → the LWP walk above already charged its 0.5).
+  const halfLeaves = await prisma.leaveApplication.findMany({
+    where: { userId: exit.userId, status: "approved", fromDate: { lte: lwd }, toDate: { gte: firstDay } },
+    select: { fromDate: true, toDate: true, reason: true, totalDays: true },
+  });
+  const halfLeaveDates = new Set(
+    halfLeaves.filter(isHalfDayLeave).map((lv) => lv.fromDate.toISOString().slice(0, 10)),
+  );
+  const half = halfRows.filter((r) => !halfLeaveDates.has(r.date.toISOString().slice(0, 10))).length;
 
   const lopInPeriod = absent + lop + (half + halfLop) * 0.5 + unpaidLeaveDays;
   const paidDays = Math.max(0, lwdDay - lopInPeriod);

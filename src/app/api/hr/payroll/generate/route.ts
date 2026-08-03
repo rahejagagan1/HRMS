@@ -9,7 +9,10 @@ import { getMonthSalary } from "@/lib/hr/salary-periods";
 // Math model:
 //   workingDays  = calendar days in run.month (28 / 30 / 31)
 //   lopDays      = absent + lop + 0.5 × (half_day + half_day_lop) + unpaid-leave weekdays in month
-//   paidDays     = workingDays − lopDays
+//                  (a single-date HALF-day unpaid leave counts 0.5, not 1)
+//   paidDays     = workingDays − pre-joining days − lopDays   (mid-month joiners
+//                  are paid from EmployeeProfile.joiningDate; exits are capped
+//                  at the last working day; joined after the month → skipped)
 //   lopFactor    = paidDays / workingDays
 //   gross        = (basic + hra + specialAllowance) / 12 × lopFactor
 //                  + bonus + Σ AdhocLineItem(kind=payment)
@@ -64,7 +67,7 @@ export async function POST(req: NextRequest) {
     await setRunStatus("processing");
 
     const structures = await prisma.salaryStructure.findMany({
-      include: { user: { select: { id: true, isActive: true, employeeProfile: { select: { businessUnit: true } } } } },
+      include: { user: { select: { id: true, isActive: true, employeeProfile: { select: { businessUnit: true, joiningDate: true } } } } },
     });
 
     const firstDay = new Date(Date.UTC(run.year, run.month, 1));
@@ -194,21 +197,19 @@ export async function POST(req: NextRequest) {
       },
       select: { userId: true, fromDate: true, toDate: true, reason: true, totalDays: true },
     }) : [];
-    const paidHalfByUser = new Map<number, Set<string>>();
+    // Single-date half-day leave test — the [Half Day]/[First Half]/[Second
+    // Half] marker with ≤ 0.5 days. Shared by the half-day excuse and the
+    // unpaid-leave (LWP) charge below so both sides price a half as 0.5.
+    const isHalfDayLeave = (lv: { fromDate: Date; toDate: Date; reason: string | null; totalDays: unknown }) =>
+      /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
+      && Number(lv.totalDays) <= 0.5
+      && lv.fromDate.getTime() === lv.toDate.getTime();
+    const halfLeaveDatesByUser = new Map<number, Set<string>>();
     for (const lv of paidHalfLeaves) {
-      const isHalf = /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
-        && Number(lv.totalDays) <= 0.5
-        && lv.fromDate.getTime() === lv.toDate.getTime();
-      if (!isHalf) continue;
-      const set = paidHalfByUser.get(lv.userId) ?? new Set<string>();
+      if (!isHalfDayLeave(lv)) continue;
+      const set = halfLeaveDatesByUser.get(lv.userId) ?? new Set<string>();
       set.add(lv.fromDate.toISOString().slice(0, 10));
-      paidHalfByUser.set(lv.userId, set);
-    }
-    const excusedHalfByUser = new Map<number, number>();
-    for (const r of halfDayRows) {
-      if (paidHalfByUser.get(r.userId)?.has(r.date.toISOString().slice(0, 10))) {
-        excusedHalfByUser.set(r.userId, (excusedHalfByUser.get(r.userId) ?? 0) + 1);
-      }
+      halfLeaveDatesByUser.set(lv.userId, set);
     }
 
     // Carry Over Leave balances → leave encashment for employees whose F&F
@@ -240,13 +241,31 @@ export async function POST(req: NextRequest) {
         toDate:   { gte: firstDay },
         leaveType: { isPaid: false },
       },
-      select: { userId: true, fromDate: true, toDate: true },
+      select: { userId: true, fromDate: true, toDate: true, reason: true, totalDays: true },
     }) : [];
-    const unpaidLeavesByUser = new Map<number, { fromDate: Date; toDate: Date }[]>();
+    type UnpaidLeave = { fromDate: Date; toDate: Date; reason: string | null; totalDays: unknown };
+    const unpaidLeavesByUser = new Map<number, UnpaidLeave[]>();
     for (const lv of unpaidLeaveRows) {
       const arr = unpaidLeavesByUser.get(lv.userId) ?? [];
-      arr.push({ fromDate: lv.fromDate, toDate: lv.toDate });
+      arr.push({ fromDate: lv.fromDate, toDate: lv.toDate, reason: lv.reason, totalDays: lv.totalDays });
       unpaidLeavesByUser.set(lv.userId, arr);
+    }
+
+    // Half-day LWPs join the half-day excuse set too: the LWP charge below
+    // prices that half at 0.5 directly, so a half_day attendance row on the
+    // same date (they worked the other half) would double-dock the same
+    // missing half.
+    for (const lv of unpaidLeaveRows) {
+      if (!isHalfDayLeave(lv)) continue;
+      const set = halfLeaveDatesByUser.get(lv.userId) ?? new Set<string>();
+      set.add(lv.fromDate.toISOString().slice(0, 10));
+      halfLeaveDatesByUser.set(lv.userId, set);
+    }
+    const excusedHalfByUser = new Map<number, number>();
+    for (const r of halfDayRows) {
+      if (halfLeaveDatesByUser.get(r.userId)?.has(r.date.toISOString().slice(0, 10))) {
+        excusedHalfByUser.set(r.userId, (excusedHalfByUser.get(r.userId) ?? 0) + 1);
+      }
     }
 
     let totalNetPay = 0, totalCTC = 0, skipped = 0;
@@ -283,13 +302,16 @@ export async function POST(req: NextRequest) {
       const unpaidLeaves = unpaidLeavesByUser.get(s.userId) ?? [];
       let unpaidLeaveDays = 0;
       for (const lv of unpaidLeaves) {
+        // A half-day LWP docks only its own half — the other half is either
+        // worked (scored via attendance above) or a paid half-leave.
+        const perDay = isHalfDayLeave(lv) ? 0.5 : 1;
         const start = lv.fromDate > firstDay ? lv.fromDate : firstDay;
         const end   = lv.toDate   < lastDay  ? lv.toDate   : lastDay;
         const cur   = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
         const stop  = new Date(Date.UTC(end.getUTCFullYear(),   end.getUTCMonth(),   end.getUTCDate()));
         while (cur.getTime() <= stop.getTime()) {
           const dow = cur.getUTCDay();
-          if (dow !== 0 && dow !== 6) unpaidLeaveDays += 1;
+          if (dow !== 0 && dow !== 6) unpaidLeaveDays += perDay;
           cur.setUTCDate(cur.getUTCDate() + 1);
         }
       }
@@ -302,7 +324,14 @@ export async function POST(req: NextRequest) {
       const ceiling = (lwd && lwd.getTime() >= firstDay.getTime() && lwd.getTime() <= lastDay.getTime())
         ? lwd.getUTCDate()
         : daysInMonth;
-      const paidDays   = Math.max(0, ceiling - lopDays);
+      // Floor the paid window at the joining date. Days before someone joined
+      // have NO attendance rows, so they never surface as absent/LOP — without
+      // this, a mid-month joiner is paid from the 1st. joiningDate is stored
+      // at UTC midnight; joined after the run month → nothing earned, skip.
+      const doj = (s.user as any).employeeProfile?.joiningDate as Date | null ?? null;
+      if (doj && doj.getTime() > lastDay.getTime()) { skipped += 1; continue; }
+      const preJoinDays = (doj && doj.getTime() > firstDay.getTime()) ? doj.getUTCDate() - 1 : 0;
+      const paidDays   = Math.max(0, ceiling - preJoinDays - lopDays);
       const lopFactor  = paidDays / daysInMonth;
 
       // All CTC components are stored as ANNUAL — divide by 12 for the
@@ -345,7 +374,9 @@ export async function POST(req: NextRequest) {
       // components), so /12 to get the per-month amount before LOP scaling.
       const pfBase    = (pfAnnual / 12) * lopFactor;
       const esiCalc   = (parseFloat(s.esiEmployee.toString()) / 12) * lopFactor;
-      const ptCalc    = lopDays > 5 ? 0 : parseFloat(s.professionalTax.toString());
+      // Pre-joining days count as unpaid for the PT waiver too — a mid-month
+      // joiner with < ~25 payable days gets the same relief as heavy LOP.
+      const ptCalc    = (lopDays + preJoinDays) > 5 ? 0 : parseFloat(s.professionalTax.toString());
       const tdsCalc   = parseFloat(s.tds.toString()) / 12;
 
       const ptOvr  = overrideByUserKind.get(`${s.userId}:PT`);

@@ -713,19 +713,12 @@ export default function AttendancePage() {
   // Caller's own shift — drives the per-row LATE chip cutoff (shift
   // startTime + breakMinutes). Without it the page falls back to a
   // hardcoded 10:00 IST rule which mis-flags both the 5-min grace
-  // window and YT Labs's 11:00 start. Cheap single-row fetch.
+  // window and YT Labs's 11:00 start. endTime is needed too: on a
+  // first-half-leave/WFH day the LATE cutoff moves to the shift
+  // MID-POINT, which can't be computed without it. Cheap single-row fetch.
   const { data: myShiftData } = useSWR<{
-    shift: { startTime: string | null; breakMinutes: number | null } | null;
+    shift: { startTime: string | null; endTime: string | null; breakMinutes: number | null } | null;
   }>(`/api/hr/me/shift`, fetcher);
-  // Late cutoff in IST minutes-of-day. Default 10:00 + 0 grace when
-  // no shift is assigned (matches clock-in route's legacy fallback).
-  const lateCutoffMin: number = (() => {
-    const s = myShiftData?.shift;
-    if (!s?.startTime) return 10 * 60;
-    const [sh, sm] = String(s.startTime).split(":").map((n) => Number(n) || 0);
-    const grace    = Number.isFinite(s.breakMinutes) ? Number(s.breakMinutes) : 15;
-    return sh * 60 + sm + grace;
-  })();
   const { data: regsData = [] } = useSWR(`/api/hr/attendance/regularize?view=${regView}`, fetcher);
   // Prefetch regularization balance so the modal shows it instantly on open.
   // Same key the modal uses — SWR dedupes and serves from cache.
@@ -1441,7 +1434,7 @@ export default function AttendancePage() {
             targetOrgLevel={user?.orgLevel ?? null}
             targetIsDeveloper={user?.isDeveloper === true}
             shiftStartTime={myShiftData?.shift?.startTime ?? null}
-            shiftEndTime={null}
+            shiftEndTime={myShiftData?.shift?.endTime ?? null}
             shiftBreakMinutes={myShiftData?.shift?.breakMinutes ?? null}
             viewerIsGaganDev={false}
             onSelfApply={(kind, date) => openForm(kind, date)}
