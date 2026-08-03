@@ -43,7 +43,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     const exit = await prisma.employeeExit.findUnique({
       where: { id: exitId },
-      select: { userId: true },
+      select: { userId: true, lastWorkingDay: true },
     });
     if (!exit) return NextResponse.json({ error: "Exit not found" }, { status: 404 });
 
@@ -76,22 +76,51 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     let advAmount = 0;
     for (const r of asRows) advAmount += parseFloat(r.amount) || 0;
 
+    // Due (unpaid) bonuses effective in the F&F month — the same rows the
+    // payroll engine adds to the exit-month payslip's gross. Included in the
+    // statement's earnings (fullSettlementNet); NOT in the F&F payout below
+    // (bonuses are paid via the payslip, so adding them here would double-pay).
+    let bonusAmount = 0;
+    if (exit.lastWorkingDay) {
+      const lwd = exit.lastWorkingDay;
+      const mStart = new Date(Date.UTC(lwd.getUTCFullYear(), lwd.getUTCMonth(), 1));
+      const mEnd   = new Date(Date.UTC(lwd.getUTCFullYear(), lwd.getUTCMonth() + 1, 1));
+      const bRows = await prisma.$queryRawUnsafe<Array<{ amount: string }>>(
+        `SELECT amount::text AS amount FROM "EmployeeBonus"
+          WHERE "userId" = $1 AND "paymentStatus" = 'due_future'
+            AND "effectiveDate" >= $2 AND "effectiveDate" < $3`,
+        exit.userId, mStart, mEnd,
+      );
+      for (const r of bRows) bonusAmount += parseFloat(r.amount) || 0;
+    }
+
     // Working days for the exit month (blank when already paid — matches the
-    // template editor, where blank WorkingDays => full-month proration).
+    // template editor, where blank WorkingDays => full-month proration). A
+    // real 0 is passed as "0" so zero-worked-days exits get ZERO salary
+    // components (leave encashment only), not a full-month breakdown.
     const pending = await computeExitPendingSalary(exitId);
-    const workingDays = pending && !pending.alreadyPaid && Number(pending.paidDays) > 0
+    const workingDays = pending && !pending.alreadyPaid && pending.paidDays != null
       ? String(pending.paidDays)
       : "";
 
     // Professional Tax: ₹200 flat for non-interns (₹0 for interns) — the NB
     // Media standard shown on the Exit Statement. Deducting it (in addition to
     // PF) makes this net equal the statement's "Net Salary Payable (A − B)".
-    const professionalTax = isIntern ? "0" : "200";
+    // Zero worked days → no salary → no PT either.
+    const professionalTax = isIntern || workingDays === "0" ? "0" : "200";
+
+    // Real exit-month length (28–31) → the pro-ration denominator, matching
+    // the payslip engine's paidDays / daysInMonth factor.
+    const daysInMonth = pending?.daysInMonth && pending.daysInMonth >= 28
+      ? String(pending.daysInMonth)
+      : "";
 
     const settlement = computeExitSettlement({
       AnnualPackage:       structure.ctc != null ? String(structure.ctc) : "",
       WorkingDays:         workingDays,
+      DaysInMonth:         daysInMonth,
       LeaveEncashmentDays: carryDays != null ? String(carryDays) : "",
+      BonusAmount:         bonusAmount > 0 ? String(bonusAmount) : "",
       AdvanceSalaryAmount: advAmount > 0 ? String(advAmount) : "",
       EnablePf:            isIntern ? "false" : (structure.pfEligible ? "true" : "false"),
       ProfessionalTax:     professionalTax,
@@ -110,7 +139,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       inputs: {
         annualPackage: structure.ctc != null ? Number(structure.ctc) : 0,
         workingDays: workingDays || null,
+        daysInMonth: daysInMonth || null,
         leaveEncashmentDays: carryDays ?? null,
+        bonusAmount,
         advanceSalaryAmount: advAmount,
         enablePf: !isIntern && structure.pfEligible === true,
         professionalTax: Number(professionalTax),

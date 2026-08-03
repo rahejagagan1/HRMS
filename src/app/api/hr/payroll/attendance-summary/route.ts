@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, canViewSalary, serverError } from "@/lib/api-auth";
 import { resolveBrandScope } from "@/lib/hr/brand-scope";
+import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay } from "@/lib/hr/lop-integrity";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +101,7 @@ export async function GET(req: NextRequest) {
       LEFT JOIN "EmployeeProfile" ep ON ep."userId" = a."userId"
           WHERE a.date >= $1 AND a.date <= $2
             AND a.status IN ('absent', 'lop', 'half_day', 'half_day_lop')
+            AND a."isRegularized" = FALSE
             ${brandClause}
           ORDER BY a."userId", a.date ASC`,
         monthStart, monthEnd, ...brandArgs,
@@ -119,6 +121,55 @@ export async function GET(req: NextRequest) {
         if (meta.weight >= 1) row.absentDays += 1; else row.halfDays += 1;
         row.lopDays += meta.weight;
         row.dates.push({ date: ymd(r.date), reason: meta.reason, weight: meta.weight });
+      }
+
+      // 1b) Unresolved missed clock-outs — priced by the SAME shared engine
+      // payroll/generate uses (shift-aware, half-day-leave aware), so what
+      // this pre-check shows is exactly what the payslips will charge. These
+      // rows used to be invisible here AND free in payroll — the silent-
+      // free-day hole. Tampered rows (penalty note without the penalty
+      // status) come back as warnings so drift is caught before generating.
+      const scopedUsers = await prisma.$queryRawUnsafe<{
+        userId: number; userName: string; employeeId: string | null;
+      }[]>(
+        `SELECT DISTINCT a."userId", u.name AS "userName", ep."employeeId"
+           FROM "Attendance" a
+           JOIN "User" u ON u.id = a."userId"
+      LEFT JOIN "EmployeeProfile" ep ON ep."userId" = a."userId"
+          WHERE a.date >= $1 AND a.date <= $2
+            ${brandClause}`,
+        monthStart, monthEnd, ...brandArgs,
+      );
+      const scopedById = new Map(scopedUsers.map((u) => [u.userId, u]));
+      const scopedIds = Array.from(scopedById.keys());
+      const [swipeCharges, tampered] = await Promise.all([
+        priceMissedSwipes({ userIds: scopedIds, firstDay: monthStart, lastDay: monthEnd }),
+        findTamperedRows({ firstDay: monthStart, lastDay: monthEnd, userIds: scopedIds }),
+      ]);
+      const warnings: Array<{ userId: number; userName: string; date: string; kind: string; detail: string }> = [];
+      for (const c of swipeCharges) {
+        const u = scopedById.get(c.userId);
+        if (!u) continue;
+        if (c.charge > 0) {
+          const row = getRow(c.userId, u.userName, u.employeeId);
+          row.halfDays += 1;
+          row.lopDays += c.charge;
+          row.dates.push({ date: c.date, reason: c.reason, weight: c.charge });
+        }
+        if (c.pendingDecision) {
+          warnings.push({
+            userId: c.userId, userName: u.userName, date: c.date,
+            kind: c.pendingDecision === "open_request" ? "open_request" : "stale_status",
+            detail: c.reason,
+          });
+        }
+      }
+      for (const t of tampered) {
+        warnings.push({
+          userId: t.userId, userName: t.userName ?? String(t.userId), date: t.date,
+          kind: "status_mismatch",
+          detail: `Status is "${t.status}" but the row's own note says "${t.expectedStatus}" was applied — changed outside the app?`,
+        });
       }
 
       // 2) Unpaid-leave (LWP) days — approved leaves on an UNPAID leave type
@@ -146,6 +197,7 @@ export async function GET(req: NextRequest) {
             ${brandClause}`,
         monthStart, monthEnd, ...brandArgs,
       );
+      const lwpShiftCtx = await shiftContextForUsers(Array.from(new Set(lwpRows.map((r) => r.userId))));
       for (const lv of lwpRows) {
         const weight = isHalfDayLeave(lv) ? 0.5 : 1;
         const from = new Date(lv.fromDate), to = new Date(lv.toDate);
@@ -155,8 +207,10 @@ export async function GET(req: NextRequest) {
         const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
         const row = getRow(lv.userId, lv.userName, lv.employeeId);
         while (cur.getTime() <= stop.getTime()) {
-          const dow = cur.getUTCDay();
-          if (dow !== 0 && dow !== 6) { // weekdays only, like payroll
+          // Shift-aware (mirrors payroll/generate): a working Saturday per
+          // the employee's OWN shift counts; a Mon–Fri fallback applies when
+          // no shift is assigned.
+          if (isPayrollWorkingDay(cur, lwpShiftCtx.get(lv.userId))) {
             row.lwpDays += weight;
             row.lopDays += weight;
             row.dates.push({
@@ -180,7 +234,7 @@ export async function GET(req: NextRequest) {
           lopDays:    String(r.lopDays),
           dates:      r.dates.sort((a, b) => a.date.localeCompare(b.date)),
         }));
-      return NextResponse.json({ items });
+      return NextResponse.json({ items, warnings });
     }
 
     // lop_reversal — leaves approved on a paid LeaveType during the cycle

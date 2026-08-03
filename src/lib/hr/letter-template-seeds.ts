@@ -551,7 +551,9 @@ ${SIGNOFF_HTML_YT_LABS}
 
       // ── Settlement metrics ─────────────────────────────────
       { key: "WorkingDays",         label: "Working Days",         type: "number", required: true,  placeholder: "e.g. 15",
-        help: "Pro-rates every earnings line as (this / 30). Use the actual days the employee worked in their final month." },
+        help: "Pro-rates every earnings line as (this / Days in F&F Month). Use the actual days the employee worked in their final month." },
+      { key: "DaysInMonth",         label: "Days in F&F Month",    type: "number", required: false, placeholder: "auto",
+        help: "Denominator for the pro-ration (28–31). Auto-filled from the employee's exit month; leave blank to use the legacy 30-day convention." },
       { key: "LossOfPayDays",       label: "Loss of Pay Days",     type: "number", required: false, placeholder: "0" },
       { key: "LeaveEncashmentDays", label: "Leave Encashment Days",type: "number", required: false, placeholder: "0",
         help: "Adds (Basic + DA per day) × this many days to earnings. Leave blank or 0 to skip." },
@@ -559,6 +561,8 @@ ${SIGNOFF_HTML_YT_LABS}
         help: "Auto-filled from the employee's Advance Salary entries in payroll (informational — days paid in advance)." },
       { key: "AdvanceSalaryAmount", label: "Advance Salary (₹)",   type: "number", required: false, placeholder: "0.00",
         help: "Auto-filled from the employee's Advance Salary payroll entries. Added to Total Earnings." },
+      { key: "BonusAmount",         label: "Bonus (₹)",            type: "number", required: false, placeholder: "0.00",
+        help: "Auto-filled from the employee's due (unpaid) bonuses effective in the F&F month — same rows the payroll engine pays. Added to Total Earnings; edit or clear as needed." },
       { key: "LastSalaryProcessed", label: "Last Salary Processed",type: "text",   required: false, placeholder: "Apr-2026" },
       { key: "FnFProcessed",        label: "F&F Processed",        type: "text",   required: false, placeholder: "May-2026" },
 

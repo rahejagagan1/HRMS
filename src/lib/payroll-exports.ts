@@ -257,7 +257,9 @@ export async function loadExportRows(runId: number): Promise<{
         const lwd = lwdByUser.get(p.userId);
         const isFnFMonth = !!lwd && lwd.getTime() >= firstDay.getTime() && lwd.getTime() <= lastDay.getTime();
         const carryDays = isFnFMonth ? (carryByUser.get(p.userId) ?? 0) : 0;
-        return carryDays > 0 ? ((num(s.basic) + num(s.dearnessAllowance)) / 12 / 30) * carryDays : 0;
+        // Per-day = monthly (Basic+DA) / real days in the run month — same
+        // formula as payroll/generate, so export == payslip to the paise.
+        return carryDays > 0 ? ((num(s.basic) + num(s.dearnessAllowance)) / 12 / lastDay.getUTCDate()) * carryDays : 0;
       })(),
       splitComponents: splitByUser.get(p.userId) ?? null,
       adhocPayByType: payByUser.get(p.userId) ?? {},

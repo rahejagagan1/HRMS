@@ -220,7 +220,7 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
       setEmployeeSalaryType(null);
       const AUTO_FILLED_KEYS = [
         "LeaveEncashmentDays", "AdvanceSalaryDays", "AdvanceSalaryAmount",
-        "WorkingDays", "LossOfPayDays", "FnFAmount", "BankAccount", "BankIFSC",
+        "WorkingDays", "LossOfPayDays", "DaysInMonth", "BonusAmount", "FnFAmount", "BankAccount", "BankIFSC",
         "Bank", "PANNumber", "AnnualPackage", "PaymentMode", "EnablePf",
         "ProfessionalTax", "SalaryType",
       ];
@@ -265,6 +265,8 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
         // employee has an active exit and the exit month isn't already paid.
         let workingDaysFill: string | undefined;
         let lopDaysFill: string | undefined;
+        let daysInMonthFill: string | undefined;
+        let bonusAmountFill: string | undefined;
         const activeExit = (u as any)?.activeExit;
         if (activeExit?.id) {
           try {
@@ -273,10 +275,38 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
               const pj = await ps.json();
               // Fill worked-days / LOP even when the exit month is already paid
               // (exited employees) — pending-salary now returns the real days.
-              if (Number(pj?.paidDays) > 0) workingDaysFill = String(pj.paidDays);
+              // A genuine 0 is filled as "0" (NOT left blank): blank means
+              // "full month" to the calc, so a zero-worked-days exit would
+              // otherwise print a full month's salary breakdown.
+              if (pj?.paidDays != null && Number.isFinite(Number(pj.paidDays))) workingDaysFill = String(pj.paidDays);
               if (pj?.breakdown?.lopInPeriod != null) lopDaysFill = String(pj.breakdown.lopInPeriod);
+              // Real length of the exit month (28–31) — the pro-ration
+              // denominator, so the statement matches the payslip's factor.
+              if (Number(pj?.daysInMonth) >= 28) daysInMonthFill = String(pj.daysInMonth);
             }
           } catch { /* network blip — HR can still type manually */ }
+          // Due (unpaid) bonuses effective in the F&F month — the same rows
+          // the payroll engine adds to the exit-month payslip's gross, so the
+          // statement's Bonus line mirrors the payslip.
+          if (activeExit?.lastWorkingDay) {
+            try {
+              const lwd = new Date(activeExit.lastWorkingDay);
+              const bres = await fetch(`/api/hr/payroll/bonus?userId=${employee.id}`);
+              if (bres.ok) {
+                const bj = await bres.json();
+                const items: any[] = Array.isArray(bj?.items) ? bj.items : [];
+                let sum = 0;
+                for (const b of items) {
+                  if (b?.paymentStatus !== "due_future") continue;
+                  const eff = new Date(b.effectiveDate);
+                  if (eff.getUTCFullYear() === lwd.getUTCFullYear() && eff.getUTCMonth() === lwd.getUTCMonth()) {
+                    sum += Number(b.amount) || 0;
+                  }
+                }
+                if (sum > 0) bonusAmountFill = String(sum);
+              }
+            } catch { /* bonus fetch failed — HR can still type manually */ }
+          }
         }
         // F&F amount = the Exit Statement's Net Payable, computed with the
         // SAME shared formula the letter renders (earnings incl. leave
@@ -287,7 +317,9 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
           const net = computeExitSettlement({
             AnnualPackage:       s?.ctc != null ? String(s.ctc) : "",
             WorkingDays:         workingDaysFill ?? "",
+            DaysInMonth:         daysInMonthFill ?? "",
             LeaveEncashmentDays: carryDays != null ? String(carryDays) : "",
+            BonusAmount:         bonusAmountFill ?? "",
             AdvanceSalaryAmount: advAmount > 0 ? String(advAmount) : "",
             EnablePf:            isIntern ? "false" : (s?.pfEligible ? "true" : "false"),
           }).net;
@@ -304,6 +336,12 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
           // Auto-picked from the exit month's attendance (worked days / LOP).
           WorkingDays:   workingDaysFill,
           LossOfPayDays: lopDaysFill,
+          // Real exit-month length → pro-ration denominator. Injected into the
+          // letter's custom values even when the template predates the field
+          // definition (the whole customValues map is sent on generate).
+          DaysInMonth:   daysInMonthFill,
+          // Due bonuses effective in the F&F month (mirrors the payslip).
+          BonusAmount:   bonusAmountFill,
           // F&F letter amount = the Exit Statement's Net Payable (same formula).
           FnFAmount:     fnfAmountFill,
           BankAccount:   p?.bankAccountNumber,
@@ -322,8 +360,11 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
           EnablePf:      isIntern ? "false" : (s?.pfEligible ? "true" : undefined),
           // Professional Tax deduction — auto-filled for regular employees:
           // the salary structure's monthly PT when set, else the standard
-          // ₹200/month (most structures leave PT at 0). Interns have none.
-          ProfessionalTax: isIntern ? undefined : String((Number(s?.professionalTax) || 0) > 0 ? Number(s.professionalTax) : 200),
+          // ₹200/month (most structures leave PT at 0). Interns have none,
+          // and a zero-worked-days F&F (leave encashment only) owes no PT.
+          ProfessionalTax: isIntern ? undefined
+            : workingDaysFill === "0" ? "0"
+            : String((Number(s?.professionalTax) || 0) > 0 ? Number(s.professionalTax) : 200),
           // Salary type drives the intern vs regular exit-statement layout.
           SalaryType:    salaryType ?? undefined,
         };

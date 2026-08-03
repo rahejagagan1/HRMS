@@ -423,7 +423,8 @@ function rupeesInWords(amount: number): string {
  *  HR types ONE input: AnnualPackage (₹) — and optionally toggles
  *  EnablePf (checkbox). Everything else is derived using the same
  *  formula as the Revised Offer Letter, pro-rated by Working Days
- *  (with a 30-day month denominator, standard payroll convention):
+ *  over the REAL length of the exit month (DaysInMonth, auto-filled;
+ *  falls back to the legacy 30-day convention when absent):
  *
  *    Monthly CTC      = annual / 12
  *    Basic            = 50%  × monthly
@@ -433,13 +434,14 @@ function rupeesInWords(amount: number): string {
  *    Medical          = 1,250  (fixed)
  *    PF               = 1,800  (fixed, only when EnablePf=true)
  *    Special          = remaining (so monthly columns tie to CTC)
- *    Then each ×= (WorkingDays / 30)  →  pro-rated for the partial
- *                                        last month.
- *    LeaveEncashment  = ((Basic + DA) / 30) × LeaveEncashmentDays
+ *    Then each ×= (WorkingDays / DaysInMonth)  →  pro-rated for the
+ *                       partial last month, same denominator as the
+ *                       payslip engine (28/29/30/31).
+ *    LeaveEncashment  = ((Basic + DA) / DaysInMonth) × LeaveEncashmentDays
  *                       — based on full-month Basic + DA (50% + 10% of
- *                       monthly), NOT pro-rated (₹30k month →
- *                       (₹15k + ₹3k)/30 = ₹600/day → ₹4,200 for 7 days).
- *                       Falls back to 0 if no LE days entered.
+ *                       monthly), NOT pro-rated by WorkingDays (₹30k July →
+ *                       (₹15k + ₹3k)/31 = ₹580.65/day → ₹4,064.52 for 7
+ *                       days). Falls back to 0 if no LE days entered.
  *
  *  HR can also enter any individual amount manually as a custom
  *  field — manual values override the computed defaults. That's
@@ -490,6 +492,7 @@ function resolveExitSettlement(field: string, customFields: Record<string, strin
     // Show 0.00 (not blank) when the amount is zero, as long as a package is
     // entered — matches the other earnings rows, which all render a figure.
     case "LeaveEncashmentAmount": return annual > 0 ? fmtRs2(final.LeaveEncashmentAmount) : "";
+    case "BonusAmount":          return annual > 0 ? fmtRs2(s.BonusAmount) : "";
     case "AdvanceSalaryAmount":  return annual > 0 ? fmtRs2(s.AdvanceSalaryAmount) : "";
     case "ProfessionalTax":     return profTax > 0 ? fmtRs2(profTax) : "0.00";
     // PF row visibility — single placeholder that resolves to the
@@ -500,24 +503,41 @@ function resolveExitSettlement(field: string, customFields: Record<string, strin
       // stored body has border:none stripped, so it shows the table's default
       // border. This row is substituted AFTER sanitization, so we must emit
       // the same border-less style here or the PF row renders without a border.
-      return enablePf
+      // Hidden when the prorated PF is 0 (e.g. zero worked days) — a 0.00
+      // deduction row for someone paid only leave encashment is noise.
+      return enablePf && final.ProvidentFund > 0
         ? `<tr><td style="padding:3pt 0">Provident Fund (PF)</td><td style="text-align:right;padding:3pt 0">${fmtRs2(final.ProvidentFund)}</td></tr>`
         : "";
     // Whole EARNINGS row block — intern: one "Stipend" line (= total);
     // regular: the full component breakdown. Empty until a package is set.
     case "EarningsRows": {
       if (annual <= 0) return "";
-      if (isIntern) return row("Stipend", totalEarnings);
-      return [
-        row("Basic", final.Basic),
-        row("HRA", final.HRA),
-        row("Medical Allowance", final.MedicalAllowance),
-        row("Conveyance Allowance", final.ConveyanceAllowance),
-        row("Special Allowance", final.SpecialAllowance),
-        row("Dearness Allowance", final.DearnessAllowance),
-        row("Leave Encashment", final.LeaveEncashmentAmount),
-        row("Advance Salary", s.AdvanceSalaryAmount),
-      ].join("");
+      if (isIntern) {
+        // Bonus prints on its own line (mirrors the payslip); Stipend is the
+        // remainder so the rows still sum to Total Earnings (A). Zero-amount
+        // lines are hidden — a zero-worked-days F&F shows only what's paid.
+        const stipend = totalEarnings - s.BonusAmount;
+        return [
+          ...(stipend > 0 ? [row("Stipend", stipend)] : []),
+          ...(s.BonusAmount > 0 ? [row("Bonus", s.BonusAmount)] : []),
+        ].join("");
+      }
+      // Only non-zero rows print — same rule as the payslip renderer. A
+      // zero-worked-days F&F therefore lists ONLY Leave Encashment / Bonus /
+      // Advance Salary instead of a column of 0.00 salary components.
+      const entries: Array<[string, number]> = [
+        ["Basic", final.Basic],
+        ["HRA", final.HRA],
+        ["Medical Allowance", final.MedicalAllowance],
+        ["Conveyance Allowance", final.ConveyanceAllowance],
+        ["Special Allowance", final.SpecialAllowance],
+        ["Dearness Allowance", final.DearnessAllowance],
+        ["Leave Encashment", final.LeaveEncashmentAmount],
+        // Bonus after Leave Encashment — same earnings order as the payslip.
+        ["Bonus", s.BonusAmount],
+        ["Advance Salary", s.AdvanceSalaryAmount],
+      ];
+      return entries.filter(([, v]) => v > 0).map(([l, v]) => row(l, v)).join("");
     }
     // Whole right-hand TAXES & DEDUCTIONS column — hidden for interns
     // (no statutory deductions); full table for regular employees.

@@ -103,7 +103,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       // F&F breakdown for exited employees, split into its two parts:
       //   • Advance Salary — from the "Advance Salary" adhoc.
       //   • Leave Encashment — computed in loadExportRows exactly as
-      //     payroll/generate does (carry-over days × (basic+DA)/12/30).
+      //     payroll/generate does (carry-over days × (basic+DA)/12/days-in-month).
       // Both are already inside Gross(A), so these are breakdown columns (not
       // extra money), like Referral Bonus / Business Expense. 0 for non-exits.
       const advanceSalary   = r.adhocPayByType["Advance Salary"] ?? 0;
