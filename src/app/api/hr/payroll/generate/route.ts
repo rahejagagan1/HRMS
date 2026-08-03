@@ -9,7 +9,9 @@ import { getMonthSalary } from "@/lib/hr/salary-periods";
 // Math model:
 //   workingDays  = calendar days in run.month (28 / 30 / 31)
 //   lopDays      = absent + lop + 0.5 × (half_day + half_day_lop) + unpaid-leave weekdays in month
-//   paidDays     = workingDays − lopDays
+//   paidDays     = workingDays − pre-joining days − lopDays   (mid-month joiners
+//                  are paid from EmployeeProfile.joiningDate; exits are capped
+//                  at the last working day; joined after the month → skipped)
 //   lopFactor    = paidDays / workingDays
 //   gross        = (basic + hra + specialAllowance) / 12 × lopFactor
 //                  + bonus + Σ AdhocLineItem(kind=payment)
@@ -64,7 +66,7 @@ export async function POST(req: NextRequest) {
     await setRunStatus("processing");
 
     const structures = await prisma.salaryStructure.findMany({
-      include: { user: { select: { id: true, isActive: true, employeeProfile: { select: { businessUnit: true } } } } },
+      include: { user: { select: { id: true, isActive: true, employeeProfile: { select: { businessUnit: true, joiningDate: true } } } } },
     });
 
     const firstDay = new Date(Date.UTC(run.year, run.month, 1));
@@ -302,7 +304,14 @@ export async function POST(req: NextRequest) {
       const ceiling = (lwd && lwd.getTime() >= firstDay.getTime() && lwd.getTime() <= lastDay.getTime())
         ? lwd.getUTCDate()
         : daysInMonth;
-      const paidDays   = Math.max(0, ceiling - lopDays);
+      // Floor the paid window at the joining date. Days before someone joined
+      // have NO attendance rows, so they never surface as absent/LOP — without
+      // this, a mid-month joiner is paid from the 1st. joiningDate is stored
+      // at UTC midnight; joined after the run month → nothing earned, skip.
+      const doj = (s.user as any).employeeProfile?.joiningDate as Date | null ?? null;
+      if (doj && doj.getTime() > lastDay.getTime()) { skipped += 1; continue; }
+      const preJoinDays = (doj && doj.getTime() > firstDay.getTime()) ? doj.getUTCDate() - 1 : 0;
+      const paidDays   = Math.max(0, ceiling - preJoinDays - lopDays);
       const lopFactor  = paidDays / daysInMonth;
 
       // All CTC components are stored as ANNUAL — divide by 12 for the
@@ -345,7 +354,9 @@ export async function POST(req: NextRequest) {
       // components), so /12 to get the per-month amount before LOP scaling.
       const pfBase    = (pfAnnual / 12) * lopFactor;
       const esiCalc   = (parseFloat(s.esiEmployee.toString()) / 12) * lopFactor;
-      const ptCalc    = lopDays > 5 ? 0 : parseFloat(s.professionalTax.toString());
+      // Pre-joining days count as unpaid for the PT waiver too — a mid-month
+      // joiner with < ~25 payable days gets the same relief as heavy LOP.
+      const ptCalc    = (lopDays + preJoinDays) > 5 ? 0 : parseFloat(s.professionalTax.toString());
       const tdsCalc   = parseFloat(s.tds.toString()) / 12;
 
       const ptOvr  = overrideByUserKind.get(`${s.userId}:PT`);
