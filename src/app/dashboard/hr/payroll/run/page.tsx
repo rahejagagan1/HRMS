@@ -1003,8 +1003,10 @@ function PreCheckPanel({ runId, monthLabel, runStatus, brand, onClose }: { runId
                 <tr className="text-left text-[10.5px] uppercase tracking-wider text-slate-500">
                   <th className="px-4 py-2">Employee</th>
                   <th className="px-2 py-2 text-center">Days</th>
+                  <th className="px-2 py-2 text-center">LOP</th>
                   <th className="px-2 py-2 text-right">Gross</th>
-                  <th className="px-2 py-2 text-right">Arrears</th>
+                  <th className="px-2 py-2 text-right">Bonus</th>
+                  <th className="px-2 py-2 text-right">Adhoc</th>
                   <th className="px-2 py-2 text-right">PF</th>
                   <th className="px-2 py-2 text-right">Deductions</th>
                   <th className="px-4 py-2 text-right">Net</th>
@@ -1017,10 +1019,29 @@ function PreCheckPanel({ runId, monthLabel, runStatus, brand, onClose }: { runId
                     <td className="px-2 py-2 text-center tabular-nums text-slate-600 whitespace-nowrap">
                       {Number(p.presentDays)}<span className="text-slate-400">/{p.workingDays}</span>
                     </td>
+                    <td className={`px-2 py-2 text-center tabular-nums whitespace-nowrap ${parseFloat(p.lopDays) > 0 ? "text-rose-700 font-semibold" : "text-slate-400"}`}>
+                      {parseFloat(p.lopDays) > 0 ? Number(p.lopDays) : "—"}
+                    </td>
                     <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">{fmtInr(parseFloat(p.grossEarnings))}</td>
                     <td className="px-2 py-2 text-right tabular-nums text-emerald-700 whitespace-nowrap">
                       {parseFloat(p.bonus) > 0 ? fmtInr(parseFloat(p.bonus)) : "—"}
                     </td>
+                    {/* Adhoc payments baked into gross (reimbursements, advance
+                        salary, arrears…) — itemised by type in the tooltip.
+                        ff_settlement is excluded to mirror the engine's gross. */}
+                    {(() => {
+                      const items = ((p.adhocPayments ?? []) as { type: string; amount: number }[])
+                        .filter((a) => a.type !== "ff_settlement");
+                      const sum = items.reduce((s, a) => s + (a.amount || 0), 0);
+                      return (
+                        <td
+                          className="px-2 py-2 text-right tabular-nums text-emerald-700 whitespace-nowrap"
+                          title={items.map((a) => `${a.type}: ${fmtInr(a.amount)}`).join("\n")}
+                        >
+                          {sum > 0 ? fmtInr(sum) : "—"}
+                        </td>
+                      );
+                    })()}
                     <td className="px-2 py-2 text-right tabular-nums text-rose-700 whitespace-nowrap">
                       {parseFloat(p.pfEmployee) > 0 ? fmtInr(parseFloat(p.pfEmployee)) : "—"}
                     </td>
