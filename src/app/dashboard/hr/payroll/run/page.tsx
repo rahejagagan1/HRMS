@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import useSWR, { mutate } from "swr";
 import { fetcher } from "@/lib/swr";
@@ -1385,7 +1385,8 @@ function SalaryRevisionSubStep({ year, month0, monthLabel, brand }: { year: numb
   };
   const url = `/api/hr/payroll/salary-revisions?month=${month0}&year=${year}&brand=${encodeURIComponent(brand)}`;
   const { data } = useSWR<{ items: Row[] }>(url, fetcher);
-  const items = data?.items ?? [];
+  const [q, setQ] = useState("");
+  const items = (data?.items ?? []).filter((r) => matchesSearch(r, q));
 
   function pct(oldS: string | null, newS: string | null) {
     const o = parseFloat(oldS ?? "0"); const n = parseFloat(newS ?? "0");
@@ -1400,7 +1401,7 @@ function SalaryRevisionSubStep({ year, month0, monthLabel, brand }: { year: numb
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
         SalaryStructure changes (CTC modified) effective in {monthLabel} — by effective date, regardless of when the edit was entered. Source: AuditLog. Edit individual structures via the employee profile's Finances tab.
       </p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee Number", "Employee Name", "Old CTC", "New CTC", "Change %", "Effective From", "By"]}>
         {items.length === 0 ? (
           <EmptyRow colSpan={7} text={`No salary revisions for ${monthLabel}.`} />
@@ -1433,7 +1434,8 @@ function TypedAdhocSubStep({ year, month0, monthLabel, brand, type, title, blurb
   const url = `/api/hr/payroll/adhoc?month=${month0}&year=${year}&kind=payment&brand=${encodeURIComponent(brand)}`;
   type AdhocRow = { id: number; userId: number; userName: string; type: string | null; amount: string; comment: string | null };
   const { data } = useSWR<{ items: AdhocRow[] }>(url, fetcher);
-  const filtered = (data?.items ?? []).filter((r) => r.type === type);
+  const [q, setQ] = useState("");
+  const filtered = (data?.items ?? []).filter((r) => r.type === type && matchesSearch(r, q));
 
   async function remove(id: number) {
     if (!confirm("Remove this entry?")) return;
@@ -1446,7 +1448,7 @@ function TypedAdhocSubStep({ year, month0, monthLabel, brand, type, title, blurb
     <>
       <h4 className="text-[15px] font-semibold text-slate-800 mb-3">{title}</h4>
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">{blurb}</p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee", "Amount", "Comment", "Action"]} rightAlignedColumns={[1]}>
         {filtered.length === 0 ? (
           <EmptyRow colSpan={4} text={`No ${title.toLowerCase()} entries for ${monthLabel}.`} />
@@ -1914,7 +1916,8 @@ function SalaryComponentClaimSubStep({ year, month0, monthLabel, brand }: { year
   type Row = { id: number; userId: number; userName: string; employeeId: string | null; title: string; category: string; amount: string; expenseDate: string; status: string };
   const url = `/api/hr/payroll/expenses?month=${month0}&year=${year}&brand=${encodeURIComponent(brand)}`;
   const { data } = useSWR<{ items: Row[] }>(url, fetcher);
-  const items = (data?.items ?? []).filter((r) => r.category === "component" || /fbp|component/i.test(r.title));
+  const [q, setQ] = useState("");
+  const items = (data?.items ?? []).filter((r) => (r.category === "component" || /fbp|component/i.test(r.title)) && matchesSearch(r, q));
 
   return (
     <>
@@ -1922,7 +1925,7 @@ function SalaryComponentClaimSubStep({ year, month0, monthLabel, brand }: { year
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
         FBP / flexible-component claims with expense date in {monthLabel}. Source: Expense rows tagged as components.
       </p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee", "Component", "Amount", "Date", "Status"]} rightAlignedColumns={[2]}>
         {items.length === 0 ? (
           <EmptyRow colSpan={5} text={`No component claims for ${monthLabel}.`} />
@@ -1947,7 +1950,8 @@ function ExpensesSubStep({ year, month0, monthLabel, brand }: { year: number; mo
   type Row = { id: number; userId: number; userName: string; employeeId: string | null; title: string; category: string; amount: string; expenseDate: string; status: string };
   const url = `/api/hr/payroll/expenses?month=${month0}&year=${year}&brand=${encodeURIComponent(brand)}`;
   const { data } = useSWR<{ items: Row[] }>(url, fetcher);
-  const items = (data?.items ?? []).filter((r) => r.category !== "component" && !/fbp|component/i.test(r.title));
+  const [q, setQ] = useState("");
+  const items = (data?.items ?? []).filter((r) => r.category !== "component" && !/fbp|component/i.test(r.title) && matchesSearch(r, q));
 
   return (
     <>
@@ -1955,7 +1959,7 @@ function ExpensesSubStep({ year, month0, monthLabel, brand }: { year: number; mo
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
         Pending and approved expense claims (travel, food, equipment, etc.) with expense date in {monthLabel}.
       </p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee", "Title", "Category", "Amount", "Date", "Status"]} rightAlignedColumns={[3]}>
         {items.length === 0 ? (
           <EmptyRow colSpan={6} text={`No expense claims for ${monthLabel}.`} />
@@ -2360,10 +2364,27 @@ function AddAdhocModal({ kind, year, month0, monthLabel, brand, existingUserIds,
 
 // ─── Step 4 sub-helpers ────────────────────────────────────────────────────
 
-function SearchBox() {
+// Generic row matcher for the payroll step tables — true when the query is
+// empty or appears in ANY top-level string/number field of the row (name,
+// employee number, title, amount, status, …). Nested objects/arrays are
+// ignored, which is fine: search is by name / emp-no / visible text.
+function matchesSearch(item: unknown, q: string): boolean {
+  const s = q.trim().toLowerCase();
+  if (!s) return true;
+  if (!item || typeof item !== "object") return false;
+  return Object.values(item as Record<string, unknown>).some(
+    (v) => (typeof v === "string" || typeof v === "number") && String(v).toLowerCase().includes(s),
+  );
+}
+
+// Controlled when given value/onChange (every step table wires these); the
+// bare `<SearchBox />` still renders (empty, inert) for any legacy caller.
+function SearchBox({ value, onChange }: { value?: string; onChange?: (v: string) => void } = {}) {
   return (
     <div className="relative w-[260px]">
       <input
+        value={value ?? ""}
+        onChange={(e) => onChange?.(e.target.value)}
         placeholder="Search"
         className="w-full h-8 pl-8 pr-3 text-[12px] rounded-md border border-slate-200 bg-white focus:outline-none focus:border-[#6f42c1]"
       />
@@ -3790,14 +3811,15 @@ function StatusPill({ status }: { status: string }) {
 function NoAttendanceSubStep({ year, month0, monthLabel, brand }: { year: number; month0: number; monthLabel: string; brand: "NB Media" | "YT Labs" }) {
   const url = `/api/hr/payroll/attendance-summary?month=${month0}&year=${year}&kind=no_attendance&brand=${encodeURIComponent(brand)}`;
   const { data } = useSWR<{ items: { userId: number; userName: string; employeeId: string | null }[] }>(url, fetcher);
-  const items = data?.items ?? [];
+  const [q, setQ] = useState("");
+  const items = (data?.items ?? []).filter((r) => matchesSearch(r, q));
   return (
     <>
       <h4 className="text-[15px] font-semibold text-slate-800 mb-3">No Attendance</h4>
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
         Employees with no attendance records this month. They were never clocked in and have no approved leave covering {monthLabel}.
       </p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee Number", "Employee Name"]}>
         {items.length === 0 ? (
           <EmptyRow colSpan={2} text={`No 'no-attendance' employees for ${monthLabel}.`} />
@@ -3817,31 +3839,90 @@ function NoAttendanceSubStep({ year, month0, monthLabel, brand }: { year: number
 
 // ─── Step 1 sub-step 3: LOP Summary ─────────────────────────────────────────
 
+type LopDateDetail = { date: string; reason: string; weight: number };
+type LopItem = { userId: number; userName: string; employeeId: string | null; absentDays: string; halfDays: string; lwpDays?: string; lopDays: string; dates?: LopDateDetail[] };
+
+// "Fri, 09 Aug" style for a LOP date; the reason colour keys off its type.
+function fmtLopDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00Z");
+  return d.toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short", timeZone: "UTC" });
+}
+function lopReasonClass(reason: string): string {
+  const r = reason.toLowerCase();
+  if (r.includes("unpaid")) return "text-orange-600 bg-orange-50 ring-orange-200";
+  if (r.includes("auto-lop")) return "text-purple-600 bg-purple-50 ring-purple-200";
+  if (r.includes("half")) return "text-amber-600 bg-amber-50 ring-amber-200";
+  return "text-rose-600 bg-rose-50 ring-rose-200"; // Absent
+}
+
 function LopSummarySubStep({ year, month0, monthLabel, brand }: { year: number; month0: number; monthLabel: string; brand: "NB Media" | "YT Labs" }) {
   const url = `/api/hr/payroll/attendance-summary?month=${month0}&year=${year}&kind=lop&brand=${encodeURIComponent(brand)}`;
-  const { data } = useSWR<{ items: { userId: number; userName: string; employeeId: string | null; absentDays: string; halfDays: string; lwpDays?: string; lopDays: string }[] }>(url, fetcher);
-  const items = data?.items ?? [];
+  const { data } = useSWR<{ items: LopItem[] }>(url, fetcher);
+  const [q, setQ] = useState("");
+  const items = (data?.items ?? []).filter((r) => matchesSearch(r, q));
+  // Which employee's date-level breakdown is expanded (one at a time).
+  const [expanded, setExpanded] = useState<number | null>(null);
   return (
     <>
       <h4 className="text-[15px] font-semibold text-slate-800 mb-3">Loss of Pay</h4>
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
         Per-employee LOP for {monthLabel}: absent + auto-LOP days + 0.5 × half-days + unpaid-leave (LWP) days. The engine subtracts these from paid days when computing the payslip.
+        <span className="ml-1 text-slate-500">Click a row to see the exact dates and why each day is LOP.</span>
       </p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee Number", "Employee Name", "Absent", "Half-Days", "LWP", "Final LOP"]}>
         {items.length === 0 ? (
           <EmptyRow colSpan={6} text={`No LOP entries for ${monthLabel}.`} />
         ) : (
-          items.map((r) => (
-            <tr key={r.userId} className="border-t border-slate-100">
-              <td className="px-3 py-2 text-[12.5px] font-mono text-slate-700">{r.employeeId ?? "—"}</td>
-              <td className="px-3 py-2 text-[12.5px] text-slate-800">{r.userName}</td>
-              <td className="px-3 py-2 text-[12.5px] text-rose-600 font-semibold">{r.absentDays}</td>
-              <td className="px-3 py-2 text-[12.5px] text-amber-600 font-semibold">{r.halfDays}</td>
-              <td className="px-3 py-2 text-[12.5px] text-orange-600 font-semibold">{r.lwpDays ?? "0"}</td>
-              <td className="px-3 py-2 text-[12.5px] text-slate-800 font-semibold">{r.lopDays}</td>
-            </tr>
-          ))
+          items.map((r) => {
+            const isOpen = expanded === r.userId;
+            const dates = r.dates ?? [];
+            return (
+              <Fragment key={r.userId}>
+                <tr
+                  className={`border-t border-slate-100 cursor-pointer transition-colors ${isOpen ? "bg-slate-50" : "hover:bg-slate-50/60"}`}
+                  onClick={() => setExpanded(isOpen ? null : r.userId)}
+                >
+                  <td className="px-3 py-2 text-[12.5px] font-mono text-slate-700">
+                    <span className="inline-flex items-center gap-1.5">
+                      <ChevronRight size={13} className={`text-slate-400 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                      {r.employeeId ?? "—"}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-[12.5px] text-slate-800">{r.userName}</td>
+                  <td className="px-3 py-2 text-[12.5px] text-rose-600 font-semibold">{r.absentDays}</td>
+                  <td className="px-3 py-2 text-[12.5px] text-amber-600 font-semibold">{r.halfDays}</td>
+                  <td className="px-3 py-2 text-[12.5px] text-orange-600 font-semibold">{r.lwpDays ?? "0"}</td>
+                  <td className="px-3 py-2 text-[12.5px] text-slate-800 font-semibold">{r.lopDays}</td>
+                </tr>
+                {isOpen && (
+                  <tr className="border-t border-slate-100 bg-slate-50/70">
+                    <td colSpan={6} className="px-6 py-3">
+                      {dates.length === 0 ? (
+                        <p className="text-[12px] text-slate-500">No date-level detail available.</p>
+                      ) : (
+                        <>
+                          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                            {dates.length} LOP {dates.length === 1 ? "day" : "days"} · {r.userName}
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {dates.map((d, i) => (
+                              <div key={i} className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5">
+                                <span className="text-[12px] font-medium text-slate-700 tabular-nums">{fmtLopDate(d.date)}</span>
+                                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${lopReasonClass(d.reason)}`}>
+                                  {d.reason}{d.weight < 1 ? " · ½" : ""}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })
         )}
       </KekaTable>
       <Pagination count={items.length} />
@@ -3854,14 +3935,15 @@ function LopSummarySubStep({ year, month0, monthLabel, brand }: { year: number; 
 function LopReversalSubStep({ year, month0, monthLabel, brand }: { year: number; month0: number; monthLabel: string; brand: "NB Media" | "YT Labs" }) {
   const url = `/api/hr/payroll/attendance-summary?month=${month0}&year=${year}&kind=lop_reversal&brand=${encodeURIComponent(brand)}`;
   const { data } = useSWR<{ items: { id: number; userId: number; userName: string; employeeId: string | null; leaveType: string; fromDate: string; toDate: string; totalDays: string }[] }>(url, fetcher);
-  const items = data?.items ?? [];
+  const [q, setQ] = useState("");
+  const items = (data?.items ?? []).filter((r) => matchesSearch(r, q));
   return (
     <>
       <h4 className="text-[15px] font-semibold text-slate-800 mb-3">Loss of Pay Reversal</h4>
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
         Approved paid-leave applications that overlap {monthLabel}. These reverse any LOP that would otherwise be stamped for the same day.
       </p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee Number", "Employee Name", "Leave Type", "From", "To", "Days"]}>
         {items.length === 0 ? (
           <EmptyRow colSpan={6} text={`No reversals for ${monthLabel}.`} />
@@ -4206,10 +4288,11 @@ function FullAndFinalSubStep({ year, month0, monthLabel, brand }: { year: number
     finalSettlementDone: boolean; ctc: string | null;
   };
   const { data } = useSWR<{ thisMonth: ExitRow[]; alreadyExited: ExitRow[] }>(url, fetcher);
+  const [q, setQ] = useState("");
   const pending = useMemo(() => {
     const all = [...(data?.thisMonth ?? []), ...(data?.alreadyExited ?? [])];
-    return all.filter((r) => !r.finalSettlementDone);
-  }, [data]);
+    return all.filter((r) => !r.finalSettlementDone && matchesSearch(r, q));
+  }, [data, q]);
   const [settleRow, setSettleRow] = useState<ExitRow | null>(null);
 
   return (
@@ -4218,7 +4301,7 @@ function FullAndFinalSubStep({ year, month0, monthLabel, brand }: { year: number
       <p className="mb-4 rounded-md bg-sky-50 border border-sky-100 px-3 py-2 text-[12px] text-slate-700">
         Pending F&amp;F across all exits. Clicking Settle adds an Adhoc payment for {monthLabel} and marks the exit as cleared.
       </p>
-      <div className="flex items-center justify-end mb-3"><SearchBox /></div>
+      <div className="flex items-center justify-end mb-3"><SearchBox value={q} onChange={setQ} /></div>
       <KekaTable columns={["Employee Number", "Employee Name", "Exit Type", "Last Working Day", "Status", "Action"]}>
         {pending.length === 0 ? (
           <EmptyRow colSpan={6} text="No pending F&F." />
