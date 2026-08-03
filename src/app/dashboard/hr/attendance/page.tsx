@@ -1444,6 +1444,7 @@ export default function AttendancePage() {
             shiftEndTime={null}
             shiftBreakMinutes={myShiftData?.shift?.breakMinutes ?? null}
             viewerIsGaganDev={false}
+            onSelfApply={(kind, date) => openForm(kind, date)}
           />
         )}
       {showRegModal && (

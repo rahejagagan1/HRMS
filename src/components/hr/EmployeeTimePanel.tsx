@@ -274,7 +274,7 @@ export function EmployeeTimePanel({
   userId, userName, isHRAdmin, meDbId, joiningDate, workLocation,
   targetOrgLevel, targetIsDeveloper,
   shiftStartTime, shiftEndTime, shiftBreakMinutes,
-  viewerIsGaganDev = false,
+  viewerIsGaganDev = false, onSelfApply,
 }: {
   userId: number; userName: string; isHRAdmin: boolean; meDbId: number | null;
   joiningDate?: string | null;
@@ -292,6 +292,12 @@ export function EmployeeTimePanel({
   // unlocks the on-behalf "Clock Out" control below. No other developer /
   // CEO / HR sees it. Enforced again server-side in the API.
   viewerIsGaganDev?: boolean;
+  // SELF-service apply: when the signed-in user views their OWN attendance,
+  // the parent (the employee attendance page) passes this so the per-row 3-dot
+  // menu opens the user's OWN apply form (regularize / WFH / on-duty / leave)
+  // for that day. This is a SELF action only — it never grants any on-behalf /
+  // HR power (those stay gated behind isHRAdmin).
+  onSelfApply?: (kind: "regularize" | "wfh" | "on_duty" | "leave", date: string) => void;
 }) {
   // CEO + developers don't punch a clock — flexible schedules mean the
   // daily "Absent" cross-marks for every non-clocked-in day are noise.
@@ -314,6 +320,10 @@ export function EmployeeTimePanel({
   // cross icon, deep-linking into /dashboard/hr/attendance with the date
   // pre-filled so the user can self-apply.
   const isSelfView = meDbId !== null && meDbId === userId;
+  // The employee viewing their OWN attendance gets the per-row 3-dot menu to
+  // apply their own requests — only when the parent wired onSelfApply and the
+  // viewer isn't an HR admin (HR uses the on-behalf kebab instead).
+  const canSelfApply = isSelfView && !isHRAdmin && typeof onSelfApply === "function";
   const today = new Date();
 
   // Live clock tick — used to add the currently-open session's elapsed
@@ -1060,14 +1070,14 @@ export function EmployeeTimePanel({
               <th className="w-[120px] px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-[#0f6ecd]">Effective Hours</th>
               <th className="w-[110px] px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-[#0f6ecd]">Gross Hours</th>
               <th className="w-[60px] px-5 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-[#0f6ecd]">Log</th>
-              {isHRAdmin ? <th className="w-[40px] px-3 py-3" /> : null}
+              {(isHRAdmin || canSelfApply) ? <th className="w-[40px] px-3 py-3" /> : null}
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
-              <tr><td colSpan={isHRAdmin ? 6 : 5} className="px-4 py-10 text-center text-[12px] text-slate-400">Loading…</td></tr>
+              <tr><td colSpan={(isHRAdmin || canSelfApply) ? 6 : 5} className="px-4 py-10 text-center text-[12px] text-slate-400">Loading…</td></tr>
             ) : fullSeries.length === 0 ? (
-              <tr><td colSpan={isHRAdmin ? 6 : 5} className="px-4 py-10 text-center text-[12px] text-slate-400">No attendance for this period.</td></tr>
+              <tr><td colSpan={(isHRAdmin || canSelfApply) ? 6 : 5} className="px-4 py-10 text-center text-[12px] text-slate-400">No attendance for this period.</td></tr>
             ) : fullSeries.map((rec) => {
               const dateOnly = String(rec.date).slice(0, 10);
               const dt = new Date(rec.date);
@@ -1615,6 +1625,57 @@ export function EmployeeTimePanel({
                             document.body,
                           ) : null}
                         </>
+                      ) : null}
+                    </td>
+                  ) : canSelfApply ? (
+                    /* Self 3-dot menu — the employee applies their OWN request
+                       for this day (regularize / WFH / on-duty / leave). Opens
+                       the user's own apply form via onSelfApply — NOT an
+                       on-behalf action, and never any HR power. */
+                    <td className="px-3 py-3 text-right align-middle relative">
+                      <button
+                        type="button"
+                        data-hr-menu
+                        onClick={(e) => {
+                          if (menuOpenKey === dateOnly) { setMenuOpenKey(null); return; }
+                          setMenuRect(e.currentTarget.getBoundingClientRect());
+                          setMenuOpenKey(dateOnly);
+                        }}
+                        title="Apply a request for this day"
+                        aria-label="Apply attendance request"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded text-slate-400 transition hover:bg-sky-50 hover:text-sky-600"
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </button>
+                      {menuOpenKey === dateOnly && menuRect && typeof document !== "undefined" ? createPortal(
+                        <div
+                          data-hr-menu
+                          className="fixed z-[100] min-w-[170px] rounded-md border border-slate-200 bg-white shadow-lg text-left text-[12.5px]"
+                          style={(() => {
+                            const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+                            const left = Math.max(8, menuRect.right - 170);
+                            return menuRect.bottom > vh * 0.65
+                              ? { bottom: vh - menuRect.top + 4, left }
+                              : { top: menuRect.bottom + 4, left };
+                          })()}
+                        >
+                          {([
+                            { kind: "regularize" as const, label: "Regularization", show: true },
+                            { kind: "wfh"        as const, label: "Work From Home", show: canApplyWfh },
+                            { kind: "on_duty"    as const, label: "On Duty",        show: true },
+                            { kind: "leave"      as const, label: "Apply Leave",    show: true },
+                          ]).filter((o) => o.show).map((o, i) => (
+                            <button
+                              key={o.kind}
+                              type="button"
+                              onClick={() => { setMenuOpenKey(null); onSelfApply?.(o.kind, dateOnly); }}
+                              className={`block w-full px-3 py-2 text-slate-700 hover:bg-sky-50 hover:text-sky-700 ${i > 0 ? "border-t border-slate-100" : ""}`}
+                            >
+                              {o.label}
+                            </button>
+                          ))}
+                        </div>,
+                        document.body,
                       ) : null}
                     </td>
                   ) : null}
