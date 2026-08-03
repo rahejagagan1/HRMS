@@ -67,53 +67,68 @@ export async function GET(req: NextRequest) {
     }
 
     if (kind === "lop") {
+      // One LOP-contributing day with WHEN it was and WHY (so HR can see the
+      // exact date + reason behind each employee's LOP, not just the totals).
+      type LopDate = { date: string; reason: string; weight: number };
       type LopRow = {
         userId: number; userName: string; employeeId: string | null;
         absentDays: number; halfDays: number; lwpDays: number; lopDays: number;
+        dates: LopDate[];
       };
-      // 1) Attendance-based LOP. Include ALL loss-of-pay statuses so every LOP
-      // employee shows — 'lop'/'half_day_lop' come from the auto-LOP job and
-      // were previously missing. Mirrors payroll/generate: full-day = absent +
-      // lop (1.0 each); half-day = half_day + half_day_lop (0.5 each).
+      // Human reason + LOP weight for each attendance status. 'lop' /
+      // 'half_day_lop' come from the auto-LOP job (missed clock-in/out
+      // auto-marked), so they read "Auto-LOP" to distinguish them from a
+      // manually-marked absent / half day.
+      const STATUS_META: Record<string, { reason: string; weight: number }> = {
+        absent:       { reason: "Absent",              weight: 1 },
+        lop:          { reason: "Auto-LOP (absent)",   weight: 1 },
+        half_day:     { reason: "Half day",            weight: 0.5 },
+        half_day_lop: { reason: "Auto-LOP (half day)", weight: 0.5 },
+      };
+      const ymd = (d: Date) => new Date(d).toISOString().slice(0, 10);
+
+      // 1) Attendance-based LOP — pull the INDIVIDUAL rows (date + status) so
+      // we can surface the exact day and reason. Mirrors payroll/generate:
+      // full-day = absent + lop (1.0 each); half-day = half_day + half_day_lop
+      // (0.5 each).
       const attRows = await prisma.$queryRawUnsafe<{
-        userId: number; userName: string; employeeId: string | null;
-        absentDays: string; halfDays: string; lopDays: string;
+        userId: number; userName: string; employeeId: string | null; date: Date; status: string;
       }[]>(
-        `SELECT a."userId",
-                u.name AS "userName",
-                ep."employeeId",
-                SUM(CASE WHEN a.status IN ('absent','lop') THEN 1 ELSE 0 END)::text            AS "absentDays",
-                SUM(CASE WHEN a.status IN ('half_day','half_day_lop') THEN 1 ELSE 0 END)::text AS "halfDays",
-                (SUM(CASE WHEN a.status IN ('absent','lop') THEN 1 ELSE 0 END)
-                 + SUM(CASE WHEN a.status IN ('half_day','half_day_lop') THEN 0.5 ELSE 0 END))::text AS "lopDays"
+        `SELECT a."userId", u.name AS "userName", ep."employeeId", a.date, a.status
            FROM "Attendance" a
            JOIN "User" u ON u.id = a."userId"
       LEFT JOIN "EmployeeProfile" ep ON ep."userId" = a."userId"
           WHERE a.date >= $1 AND a.date <= $2
             AND a.status IN ('absent', 'lop', 'half_day', 'half_day_lop')
             ${brandClause}
-          GROUP BY a."userId", u.name, ep."employeeId"`,
+          ORDER BY a."userId", a.date ASC`,
         monthStart, monthEnd, ...brandArgs,
       );
       const byUser = new Map<number, LopRow>();
+      const getRow = (userId: number, userName: string, employeeId: string | null): LopRow => {
+        let row = byUser.get(userId);
+        if (!row) {
+          row = { userId, userName, employeeId, absentDays: 0, halfDays: 0, lwpDays: 0, lopDays: 0, dates: [] };
+          byUser.set(userId, row);
+        }
+        return row;
+      };
       for (const r of attRows) {
-        byUser.set(r.userId, {
-          userId: r.userId, userName: r.userName, employeeId: r.employeeId,
-          absentDays: parseFloat(r.absentDays) || 0,
-          halfDays:   parseFloat(r.halfDays) || 0,
-          lwpDays:    0,
-          lopDays:    parseFloat(r.lopDays) || 0,
-        });
+        const meta = STATUS_META[r.status] ?? { reason: r.status, weight: 1 };
+        const row = getRow(r.userId, r.userName, r.employeeId);
+        if (meta.weight >= 1) row.absentDays += 1; else row.halfDays += 1;
+        row.lopDays += meta.weight;
+        row.dates.push({ date: ymd(r.date), reason: meta.reason, weight: meta.weight });
       }
 
       // 2) Unpaid-leave (LWP) days — approved leaves on an UNPAID leave type
-      // that overlap the cycle. Payroll counts these weekdays as LOP too, so
-      // include them here (as an LWP column, added into the final LOP) to give
-      // HR the full picture of what was deducted.
+      // that overlap the cycle. Payroll counts these weekdays as LOP too;
+      // expand each to its individual weekdays with the leave type as the
+      // reason so the date-level view is complete.
       const lwpRows = await prisma.$queryRawUnsafe<{
-        userId: number; userName: string; employeeId: string | null; fromDate: Date; toDate: Date;
+        userId: number; userName: string; employeeId: string | null; leaveType: string; fromDate: Date; toDate: Date;
       }[]>(
-        `SELECT la."userId", u.name AS "userName", ep."employeeId", la."fromDate", la."toDate"
+        `SELECT la."userId", u.name AS "userName", ep."employeeId", lt.name AS "leaveType", la."fromDate", la."toDate"
            FROM "LeaveApplication" la
            JOIN "User" u ON u.id = la."userId"
       LEFT JOIN "EmployeeProfile" ep ON ep."userId" = la."userId"
@@ -129,20 +144,16 @@ export async function GET(req: NextRequest) {
         const end   = to   < monthEnd   ? to   : monthEnd;
         const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
         const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
-        let days = 0;
+        const row = getRow(lv.userId, lv.userName, lv.employeeId);
         while (cur.getTime() <= stop.getTime()) {
           const dow = cur.getUTCDay();
-          if (dow !== 0 && dow !== 6) days += 1; // weekdays only, like payroll
+          if (dow !== 0 && dow !== 6) { // weekdays only, like payroll
+            row.lwpDays += 1;
+            row.lopDays += 1;
+            row.dates.push({ date: ymd(cur), reason: `Unpaid leave (${lv.leaveType})`, weight: 1 });
+          }
           cur.setUTCDate(cur.getUTCDate() + 1);
         }
-        if (days <= 0) continue;
-        const existing = byUser.get(lv.userId) ?? {
-          userId: lv.userId, userName: lv.userName, employeeId: lv.employeeId,
-          absentDays: 0, halfDays: 0, lwpDays: 0, lopDays: 0,
-        };
-        existing.lwpDays += days;
-        existing.lopDays += days;
-        byUser.set(lv.userId, existing);
       }
 
       const items = Array.from(byUser.values())
@@ -154,6 +165,7 @@ export async function GET(req: NextRequest) {
           halfDays:   String(r.halfDays),
           lwpDays:    String(r.lwpDays),
           lopDays:    String(r.lopDays),
+          dates:      r.dates.sort((a, b) => a.date.localeCompare(b.date)),
         }));
       return NextResponse.json({ items });
     }
