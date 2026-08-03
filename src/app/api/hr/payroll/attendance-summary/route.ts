@@ -124,11 +124,19 @@ export async function GET(req: NextRequest) {
       // 2) Unpaid-leave (LWP) days — approved leaves on an UNPAID leave type
       // that overlap the cycle. Payroll counts these weekdays as LOP too;
       // expand each to its individual weekdays with the leave type as the
-      // reason so the date-level view is complete.
+      // reason so the date-level view is complete. A single-date HALF-day
+      // LWP ([Half Day]/[First Half]/[Second Half] marker) weighs 0.5, not
+      // 1 — mirrors payroll/generate.
+      const isHalfDayLeave = (lv: { fromDate: Date; toDate: Date; reason: string | null; totalDays: unknown }) =>
+        /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
+        && Number(lv.totalDays) <= 0.5
+        && new Date(lv.fromDate).getTime() === new Date(lv.toDate).getTime();
       const lwpRows = await prisma.$queryRawUnsafe<{
-        userId: number; userName: string; employeeId: string | null; leaveType: string; fromDate: Date; toDate: Date;
+        userId: number; userName: string; employeeId: string | null; leaveType: string;
+        fromDate: Date; toDate: Date; reason: string | null; totalDays: string;
       }[]>(
-        `SELECT la."userId", u.name AS "userName", ep."employeeId", lt.name AS "leaveType", la."fromDate", la."toDate"
+        `SELECT la."userId", u.name AS "userName", ep."employeeId", lt.name AS "leaveType",
+                la."fromDate", la."toDate", la.reason, la."totalDays"::text AS "totalDays"
            FROM "LeaveApplication" la
            JOIN "User" u ON u.id = la."userId"
       LEFT JOIN "EmployeeProfile" ep ON ep."userId" = la."userId"
@@ -139,6 +147,7 @@ export async function GET(req: NextRequest) {
         monthStart, monthEnd, ...brandArgs,
       );
       for (const lv of lwpRows) {
+        const weight = isHalfDayLeave(lv) ? 0.5 : 1;
         const from = new Date(lv.fromDate), to = new Date(lv.toDate);
         const start = from > monthStart ? from : monthStart;
         const end   = to   < monthEnd   ? to   : monthEnd;
@@ -148,9 +157,13 @@ export async function GET(req: NextRequest) {
         while (cur.getTime() <= stop.getTime()) {
           const dow = cur.getUTCDay();
           if (dow !== 0 && dow !== 6) { // weekdays only, like payroll
-            row.lwpDays += 1;
-            row.lopDays += 1;
-            row.dates.push({ date: ymd(cur), reason: `Unpaid leave (${lv.leaveType})`, weight: 1 });
+            row.lwpDays += weight;
+            row.lopDays += weight;
+            row.dates.push({
+              date: ymd(cur),
+              reason: weight === 0.5 ? `Unpaid leave (${lv.leaveType}, half day)` : `Unpaid leave (${lv.leaveType})`,
+              weight,
+            });
           }
           cur.setUTCDate(cur.getUTCDate() + 1);
         }
