@@ -12,6 +12,7 @@
 //   pendingNet = fullMonthlyNet × lopFactor      (net = gross − PF − PT − TDS − ₹200)
 
 import prisma from "@/lib/prisma";
+import { priceMissedSwipes, shiftContextForUsers, isPayrollWorkingDay } from "@/lib/hr/lop-integrity";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const num = (v: unknown) => parseFloat(String(v ?? 0)) || 0;
@@ -75,8 +76,10 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
     && Number(lv.totalDays) <= 0.5
     && lv.fromDate.getTime() === lv.toDate.getTime();
 
-  // Unpaid (LWP) leave weekdays within the worked window — same as payroll.
-  // A half-day LWP docks 0.5, not a full day.
+  // Unpaid (LWP) leave working days within the worked window — same as
+  // payroll: shift-aware (working Saturdays count off the employee's OWN
+  // calendar), and a half-day LWP docks 0.5, not a full day.
+  const shiftCtx = (await shiftContextForUsers([exit.userId])).get(exit.userId);
   const unpaidLeaves = await prisma.leaveApplication.findMany({
     where: { userId: exit.userId, status: "approved", fromDate: { lte: lwd }, toDate: { gte: firstDay }, leaveType: { isPaid: false } },
     select: { fromDate: true, toDate: true, reason: true, totalDays: true },
@@ -89,11 +92,17 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
     const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
     const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
     while (cur.getTime() <= stop.getTime()) {
-      const dow = cur.getUTCDay();
-      if (dow !== 0 && dow !== 6) unpaidLeaveDays += perDay;
+      if (isPayrollWorkingDay(cur, shiftCtx)) unpaidLeaveDays += perDay;
       cur.setUTCDate(cur.getUTCDate() + 1);
     }
   }
+
+  // Unresolved missed clock-outs — priced by the SAME shared engine
+  // payroll/generate uses, so the exit statement's LOP matches the payslip.
+  // Without this, a missed swipe (e.g. on the LWD itself) cost 0.5 on the
+  // payslip but showed 0 LOP on the Exit Statement.
+  const swipeCharges = await priceMissedSwipes({ userIds: [exit.userId], firstDay, lastDay: lwd });
+  const missedSwipeLop = swipeCharges.reduce((s, c) => s + (c.charge > 0 ? c.charge : 0), 0);
 
   // Half-day EXCUSE — same rule as payroll/generate: a half_day attendance
   // row is not double-docked when the other half of that date is covered by
@@ -108,7 +117,7 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
   );
   const half = halfRows.filter((r) => !halfLeaveDates.has(r.date.toISOString().slice(0, 10))).length;
 
-  const lopInPeriod = absent + lop + (half + halfLop) * 0.5 + unpaidLeaveDays;
+  const lopInPeriod = absent + lop + (half + halfLop) * 0.5 + unpaidLeaveDays + missedSwipeLop;
   const paidDays = Math.max(0, lwdDay - lopInPeriod);
   const lopFactor = daysInMonth > 0 ? paidDays / daysInMonth : 0;
 
