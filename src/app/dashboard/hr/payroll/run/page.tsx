@@ -1004,7 +1004,7 @@ function PreCheckPanel({ runId, monthLabel, runStatus, brand, onClose }: { runId
                   <th className="px-4 py-2">Employee</th>
                   <th className="px-2 py-2 text-center">Days</th>
                   <th className="px-2 py-2 text-center">LOP</th>
-                  <th className="px-2 py-2 text-right">Gross</th>
+                  <th className="px-2 py-2 text-right">Attendance Pay</th>
                   <th className="px-2 py-2 text-right">Bonus</th>
                   <th className="px-2 py-2 text-right">Adhoc</th>
                   <th className="px-2 py-2 text-right">PF</th>
@@ -1013,42 +1013,48 @@ function PreCheckPanel({ runId, monthLabel, runStatus, brand, onClose }: { runId
                 </tr>
               </thead>
               <tbody>
-                {payslips.map((p: any) => (
-                  <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="px-4 py-2 text-slate-800 whitespace-nowrap">{p.user?.name ?? `User ${p.userId}`}</td>
-                    <td className="px-2 py-2 text-center tabular-nums text-slate-600 whitespace-nowrap">
-                      {Number(p.presentDays)}<span className="text-slate-400">/{p.workingDays}</span>
-                    </td>
-                    <td className={`px-2 py-2 text-center tabular-nums whitespace-nowrap ${parseFloat(p.lopDays) > 0 ? "text-rose-700 font-semibold" : "text-slate-400"}`}>
-                      {parseFloat(p.lopDays) > 0 ? Number(p.lopDays) : "—"}
-                    </td>
-                    <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">{fmtInr(parseFloat(p.grossEarnings))}</td>
-                    <td className="px-2 py-2 text-right tabular-nums text-emerald-700 whitespace-nowrap">
-                      {parseFloat(p.bonus) > 0 ? fmtInr(parseFloat(p.bonus)) : "—"}
-                    </td>
-                    {/* Adhoc payments baked into gross (reimbursements, advance
-                        salary, arrears…) — itemised by type in the tooltip.
-                        ff_settlement is excluded to mirror the engine's gross. */}
-                    {(() => {
-                      const items = ((p.adhocPayments ?? []) as { type: string; amount: number }[])
-                        .filter((a) => a.type !== "ff_settlement");
-                      const sum = items.reduce((s, a) => s + (a.amount || 0), 0);
-                      return (
-                        <td
-                          className="px-2 py-2 text-right tabular-nums text-emerald-700 whitespace-nowrap"
-                          title={items.map((a) => `${a.type}: ${fmtInr(a.amount)}`).join("\n")}
-                        >
-                          {sum > 0 ? fmtInr(sum) : "—"}
-                        </td>
-                      );
-                    })()}
-                    <td className="px-2 py-2 text-right tabular-nums text-rose-700 whitespace-nowrap">
-                      {parseFloat(p.pfEmployee) > 0 ? fmtInr(parseFloat(p.pfEmployee)) : "—"}
-                    </td>
-                    <td className="px-2 py-2 text-right tabular-nums text-rose-700 whitespace-nowrap">{fmtInr(parseFloat(p.totalDeductions) - parseFloat(p.pfEmployee))}</td>
-                    <td className="px-4 py-2 text-right tabular-nums font-semibold whitespace-nowrap">{fmtInr(parseFloat(p.netPay))}</td>
-                  </tr>
-                ))}
+                {payslips.map((p: any) => {
+                  // Adhoc payments baked into gross (reimbursements, advance
+                  // salary, arrears…) — ff_settlement excluded to mirror the
+                  // engine's gross. Attendance pay = gross minus the bonus and
+                  // adhoc lines, i.e. what the paid days alone earned.
+                  const adhocItems = ((p.adhocPayments ?? []) as { type: string; amount: number }[])
+                    .filter((a) => a.type !== "ff_settlement");
+                  const adhocSum = adhocItems.reduce((s, a) => s + (a.amount || 0), 0);
+                  const bonus = parseFloat(p.bonus) || 0;
+                  const attendancePay = Math.max(0, parseFloat(p.grossEarnings) - bonus - adhocSum);
+                  return (
+                    <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-4 py-2 text-slate-800 whitespace-nowrap">{p.user?.name ?? `User ${p.userId}`}</td>
+                      <td className="px-2 py-2 text-center tabular-nums text-slate-600 whitespace-nowrap">
+                        {Number(p.presentDays)}<span className="text-slate-400">/{p.workingDays}</span>
+                      </td>
+                      <td className={`px-2 py-2 text-center tabular-nums whitespace-nowrap ${parseFloat(p.lopDays) > 0 ? "text-rose-700 font-semibold" : "text-slate-400"}`}>
+                        {parseFloat(p.lopDays) > 0 ? Number(p.lopDays) : "—"}
+                      </td>
+                      <td
+                        className="px-2 py-2 text-right tabular-nums whitespace-nowrap"
+                        title={`Full gross (incl. bonus + adhoc): ${fmtInr(parseFloat(p.grossEarnings))}`}
+                      >
+                        {fmtInr(attendancePay)}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums text-emerald-700 whitespace-nowrap">
+                        {bonus > 0 ? fmtInr(bonus) : "—"}
+                      </td>
+                      <td
+                        className="px-2 py-2 text-right tabular-nums text-emerald-700 whitespace-nowrap"
+                        title={adhocItems.map((a) => `${a.type}: ${fmtInr(a.amount)}`).join("\n")}
+                      >
+                        {adhocSum > 0 ? fmtInr(adhocSum) : "—"}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums text-rose-700 whitespace-nowrap">
+                        {parseFloat(p.pfEmployee) > 0 ? fmtInr(parseFloat(p.pfEmployee)) : "—"}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums text-rose-700 whitespace-nowrap">{fmtInr(parseFloat(p.totalDeductions) - parseFloat(p.pfEmployee))}</td>
+                      <td className="px-4 py-2 text-right tabular-nums font-semibold whitespace-nowrap">{fmtInr(parseFloat(p.netPay))}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
