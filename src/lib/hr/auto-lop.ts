@@ -22,6 +22,7 @@ import { istTodayDateOnly } from "@/lib/ist-date";
 import { isWorkingDay } from "@/lib/hr/shift-working-days";
 import { ACTIVE_REQUEST_STATUSES, dayBars } from "@/lib/hr/day-rules";
 import { getPoliciesByUser } from "@/lib/hr/notification-policy";
+import { isShortLeaveReason, SHORT_LOP_STATUS, SHORT_LOP_DAYS } from "@/lib/hr/short-leave";
 
 // 48h grace + the day itself = 3 calendar days between "missed day" and
 // "earliest cron run that may apply LOP".
@@ -279,7 +280,10 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
       for (const w of wfhs) wfhMetIds.add(w.userId);
     } else {
     const otherwiseCovered = new Set<number>([
-      ...leaves.map((r) => r.userId), ...regs.map((r) => r.userId),
+      // Short-leave rows excluded: a 2h excuse must not suppress the WFH
+      // completion judgment for a user who has both on the same day.
+      ...leaves.filter((r) => !isShortLeaveReason(r.reason)).map((r) => r.userId),
+      ...regs.map((r) => r.userId),
       ...ods.map((r) => r.userId), ...compOffs.map((r) => r.userId),
     ]);
     // Per-user WFH coverage: which halves (or full) they applied for.
@@ -327,9 +331,14 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     const leaveMetIds = new Set<number>();
     const leaveHalfLopIds = new Set<number>();
     const halfLeave = new Map<number, { first: boolean; second: boolean }>();
+    // Users with a SHORT-leave application on this date (2h excuse). A short
+    // leave never blanket-shields: no clock-in at all is still a full absent
+    // day, and a missed clock-out is priced ¼ day (below) instead of ½.
+    const shortLeaveIds = new Set<number>();
     for (const l of leaves) {
       const singleDay = String(l.fromDate).slice(0, 10) === String(l.toDate).slice(0, 10);
       const reason = l.reason ?? "";
+      if (isShortLeaveReason(reason)) { shortLeaveIds.add(l.userId); continue; }
       const first  = /\[first\s+half\]/i.test(reason);
       const second = /\[second\s+half\]/i.test(reason);
       const isHalf = enforceWfhCompletion && singleDay && (first || second) && Number(l.totalDays) <= 0.5;
@@ -338,6 +347,18 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
       if (first) c.first = true; else c.second = true;
       halfLeave.set(l.userId, c);
     }
+    // Rejected short leaves count too — the "applied" fact alone softens a
+    // missed-swipe penalty to ¼ day (agreed 2026-08-04), and rejected rows
+    // aren't in the ACTIVE-status `leaves` query above.
+    const rejectedSl = await prisma.leaveApplication.findMany({
+      where: {
+        userId: { in: eligibleUserIds }, status: "rejected",
+        fromDate: { lte: date }, toDate: { gte: date },
+        reason: { contains: "[Short Leave", mode: "insensitive" },
+      },
+      select: { userId: true },
+    });
+    for (const r of rejectedSl) shortLeaveIds.add(r.userId);
     for (const [uid, c] of halfLeave) {
       if (c.first && c.second) { leaveMetIds.add(uid); continue; } // both halves leave → whole day off
       const workedTotal = attByUser.get(uid)?.totalMinutes ?? 0;
@@ -394,9 +415,26 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
     // full bar) is a terminal artefact — e.g. a second biometric scan 30s
     // after the real clock-out reopened the day. The person demonstrably
     // worked the full day; never dock them for the ghost session.
-    const toHalfDayLop = missedSwipeRows.filter(
+    const unresolvedMissed = missedSwipeRows.filter(
       (a) => !protectedIds.has(a.userId) && (a.totalMinutes ?? 0) < barsFor(a.userId).full,
     );
+    // Short-leave days get the softer ¼-day penalty (agreed 2026-08-04):
+    // applying for a short leave — even one later rejected — shows intent,
+    // so a forgotten punch costs 0.25 instead of the standard 0.5.
+    const toShortLop   = unresolvedMissed.filter((a) => shortLeaveIds.has(a.userId));
+    const toHalfDayLop = unresolvedMissed.filter((a) => !shortLeaveIds.has(a.userId));
+    if (toShortLop.length > 0) {
+      const upd = await prisma.attendance.updateMany({
+        where: { id: { in: toShortLop.map((a) => a.id) } },
+        data: {
+          status: SHORT_LOP_STATUS,
+          notes: "Auto-marked quarter-day LOP: missed clock-out on a short-leave day, not regularized within the 48h grace window.",
+        },
+      });
+      lopApplied += upd.count;
+      for (const a of toShortLop) await addLwpUsage(a.userId, date.getUTCFullYear(), SHORT_LOP_DAYS);
+      console.log(`[auto-lop] ${isoKey(date)}: ${upd.count} short-leave missed clock-outs → ${SHORT_LOP_STATUS}`);
+    }
     if (toHalfDayLop.length > 0) {
       const upd = await prisma.attendance.updateMany({
         where: { id: { in: toHalfDayLop.map((a) => a.id) } },

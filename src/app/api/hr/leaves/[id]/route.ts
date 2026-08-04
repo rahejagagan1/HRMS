@@ -10,7 +10,9 @@ import { isSingleStageApprovalEmployee } from "@/lib/hr/single-stage-approval";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 import {
   isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, SHORT_LEAVE_MONTHLY_CAP,
+  shortLeaveDayState, resolveShortLeaveDayStatus,
 } from "@/lib/hr/short-leave";
+import { dayBars } from "@/lib/hr/day-rules";
 import { istMonthRange } from "@/lib/ist-date";
 
 // After approving a HALF-day leave: if the OTHER half of the same date is
@@ -39,6 +41,55 @@ async function settleFullyCoveredHalfDay(
     create: { userId, date: dateOnly, status: "on_leave" },
     update: { status: "on_leave" },
   });
+}
+
+// After a SHORT-leave decision (approve OR reject): re-settle the day's
+// attendance row from the CURRENT state of every short leave on that date.
+// A short leave never stamps on_leave (it excuses 2h, not the day) — instead
+// the clocked-out day is re-judged by the shared resolver:
+//   approved + worked ≥ (bar − excuse)  → present (full pay)
+//   rejected + worked ≥ (bar − excuse)  → short_lop (¼ day)
+//   below the reduced bar               → half_day / unchanged (normal bands)
+// Missed-clock-out / regularized rows are left alone — the missed-swipe path
+// (auto-LOP + lop-integrity) prices those at ¼ day itself.
+async function settleShortLeaveDay(userId: number, dateOnly: Date): Promise<void> {
+  const row = await prisma.attendance.findUnique({
+    where: { userId_date: { userId, date: dateOnly } },
+    select: { id: true, status: true, isRegularized: true, totalMinutes: true, clockOut: true, notes: true },
+  });
+  if (!row || row.isRegularized || !row.clockOut) return;
+  if (!["present", "late", "half_day", "short_lop"].includes(row.status)) return;
+
+  const slRows = await prisma.leaveApplication.findMany({
+    where: { userId, fromDate: { lte: dateOnly }, toDate: { gte: dateOnly } },
+    select: { reason: true, status: true },
+  });
+  const state = shortLeaveDayState(slRows);
+  if (!state.appliedAny) return;
+
+  const shiftRows = await prisma.$queryRawUnsafe<Array<{
+    startTime: string | null; endTime: string | null; breakMinutes: number | null;
+    satStartTime: string | null; satEndTime: string | null; satGraceMinutes: number | null;
+  }>>(
+    `SELECT s."startTime", s."endTime", s."breakMinutes",
+            s."satStartTime", s."satEndTime", s."satGraceMinutes"
+       FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId"
+      WHERE us."userId" = $1`,
+    userId,
+  );
+  const bars = dayBars(dateOnly, shiftRows[0] ?? null);
+  const next = resolveShortLeaveDayStatus({
+    worked: row.totalMinutes ?? 0,
+    fullBar: bars.full, halfBar: bars.half,
+    activeMin: state.activeMin, rejectedMin: state.rejectedMin,
+    prevStatus: row.status,
+  });
+  if (next !== row.status) {
+    await prisma.attendance.update({
+      where: { id: row.id },
+      data: { status: next, notes: `Short-leave settle: ${row.status} → ${next} (worked ${row.totalMinutes}m, bar ${bars.full}m, excused ${state.activeMin}m).` },
+    });
+  }
 }
 
 function fmtRange(from: Date, to: Date, days: number) {
@@ -96,6 +147,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const rangeLabel = fmtRange(new Date(application.fromDate), new Date(application.toDate), totalDays);
     // Half-day requests carry a marker in the reason field (see POST flow).
     const isHalfDay = /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(application.reason ?? ""));
+    // Short leave: 2h excuse — NEVER stamps the day on_leave; approve/reject
+    // re-settles the day's attendance row instead (see settleShortLeaveDay).
+    const isShortLv = isShortLeaveReason(application.reason);
     // Approver display name — used by the email template so recipients
     // can see WHO took the action at each stage.
     const approverName = (self?.name as string) || (self?.email as string) || "An approver";
@@ -286,6 +340,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       });
       if (result.raced) return NextResponse.json({ error: "Request has already been decided" }, { status: 409 });
 
+      // A rejected SHORT leave changes the day's price: worked ≥ (bar − 2h)
+      // but < bar drops from the provisional full-pay to a ¼-day penalty.
+      if (isShortLv) {
+        await settleShortLeaveDay(application.userId, new Date(application.fromDate));
+      }
+
       await notifyUsers({
         actorId:  myId,
         userIds:  [application.userId],
@@ -348,7 +408,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         // half_day / half_day_lop from actual hours, judged by auto-LOP) must
         // survive the approval. Blanket on_leave + LOP refund used to wipe a
         // legitimate working-half penalty whenever the leave was approved late.
-        if (!isHalfDay) {
+        // SHORT leaves are excluded too (2026-08-04): a 2h excuse must never
+        // flip a worked day to on_leave — re-settle the day's real status.
+        if (isShortLv) {
+          await settleShortLeaveDay(application.userId, new Date(application.fromDate));
+        } else if (!isHalfDay) {
         const from = new Date(application.fromDate);
         const to   = new Date(application.toDate);
         const cur  = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
@@ -489,7 +553,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       // HALF-day leaves are EXCLUDED (2026-07-28) — same rule as the
       // fast-path above: the leave pays its own half only; the working
       // half's real outcome (incl. a half_day_lop for short hours) stays.
-      if (!isHalfDay) {
+      // SHORT leaves re-settle the day's real status instead (2026-08-04).
+      if (isShortLv) {
+        await settleShortLeaveDay(application.userId, new Date(application.fromDate));
+      } else if (!isHalfDay) {
       const from = new Date(application.fromDate);
       const to   = new Date(application.toDate);
       const cur  = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));

@@ -98,11 +98,27 @@ export async function GET() {
     //   [Second Half] ... → second_half
     //   [Half Day]    ... → first_half  (legacy — pre-split half-day requests)
     //   (no marker)       → full
-    type LeaveKind = "full" | "first_half" | "second_half";
+    //   [Short Leave - Morning/Evening] → short (2h excuse — NOT a day off;
+    //   the tile shows a "Short Leave" badge instead of a full-day chip)
+    type LeaveKind = "full" | "first_half" | "second_half" | "short";
+    const SL_RE = /\[\s*short\s*leave\s*[-–:]?\s*(morning|evening)?\s*\]/i;
     const leaveKindByUser = new Map<number, LeaveKind>();
+    const shortSlotsByUser = new Map<number, string[]>();
     for (const r of leaveTodayRows) {
-      if (leaveKindByUser.has(r.userId)) continue; // first (newest) row wins
       const reason = r.reason || "";
+      const sl = SL_RE.exec(reason);
+      if (sl) {
+        // Collect EVERY short-leave slot (a morning + evening pair can
+        // coexist); "short" only sticks as the kind if no full/half leave
+        // also covers today (combos are blocked at apply, belt-and-braces).
+        const slot = (sl[1] ?? "").toLowerCase() === "evening" ? "Evening" : "Morning";
+        const arr = shortSlotsByUser.get(r.userId) ?? [];
+        if (!arr.includes(slot)) arr.push(slot);
+        shortSlotsByUser.set(r.userId, arr);
+        if (!leaveKindByUser.has(r.userId)) leaveKindByUser.set(r.userId, "short");
+        continue;
+      }
+      if (leaveKindByUser.has(r.userId) && leaveKindByUser.get(r.userId) !== "short") continue; // first (newest) row wins
       let kind: LeaveKind = "full";
       if      (/\[First Half\]/i.test(reason))  kind = "first_half";
       else if (/\[Second Half\]/i.test(reason)) kind = "second_half";
@@ -123,6 +139,9 @@ export async function GET() {
         wfhKind:    wfhKindByUser.get(u.id) ?? null,
         leaveToday: leaveTodayIds.has(u.id),
         leaveKind:  leaveKindByUser.get(u.id) ?? null,
+        // "Morning" / "Evening" / "Morning + Evening" when today's leave is a
+        // short leave — drives the home-page Short Leave badge.
+        shortLeaveSlots: shortSlotsByUser.get(u.id)?.join(" + ") ?? null,
         // Brand for client-side filtering. Bucket NULL as NB Media
         // (parent-brand default).
         businessUnit: employeeProfile?.businessUnit || "NB Media",

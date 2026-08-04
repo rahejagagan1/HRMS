@@ -62,11 +62,12 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
 
   // LOP within the WORKED window [1st .. LWD] only. (Days after the LWD are
   // unpaid by virtue of the proration base being the full month, not LOP.)
-  const [absent, lop, halfRows, halfLop] = await Promise.all([
+  const [absent, lop, halfRows, halfLop, shortLop] = await Promise.all([
     prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "absent" } }),
     prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "lop" } }),
     prisma.attendance.findMany({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "half_day" }, select: { date: true } }),
     prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "half_day_lop" } }),
+    prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "short_lop" } }),
   ]);
 
   // Single-date half-day leave test — same rule as payroll/generate, so the
@@ -117,7 +118,7 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
   );
   const half = halfRows.filter((r) => !halfLeaveDates.has(r.date.toISOString().slice(0, 10))).length;
 
-  const lopInPeriod = absent + lop + (half + halfLop) * 0.5 + unpaidLeaveDays + missedSwipeLop;
+  const lopInPeriod = absent + lop + (half + halfLop) * 0.5 + shortLop * 0.25 + unpaidLeaveDays + missedSwipeLop;
   const paidDays = Math.max(0, lwdDay - lopInPeriod);
   const lopFactor = daysInMonth > 0 ? paidDays / daysInMonth : 0;
 
