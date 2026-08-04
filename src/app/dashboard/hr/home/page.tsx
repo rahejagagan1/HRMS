@@ -3653,10 +3653,19 @@ export default function HRHomePage() {
             </div>
 
             <div className={`${C.card} p-3.5`}>
-              <p className={`mb-3 text-[13px] font-semibold ${C.t1}`}>Working Remotely</p>
+              <p className={`mb-3 text-[13px] font-semibold ${C.t1}`}>
+                Working Remotely
+                {remote.length > 0 && (
+                  <span className={`ml-1.5 text-[11px] font-normal ${C.t3}`}>({remote.length})</span>
+                )}
+              </p>
               {remote.length > 0 ? (
+                // Show EVERY WFH applicant for today — the old slice(0, 4)
+                // silently hid everyone past the fourth avatar on heavy-WFH
+                // days (e.g. rain), with no "+N more" hint. flex-wrap rows
+                // handle overflow the same way the On Leave tile does.
                 <div className="flex flex-wrap gap-3">
-                  {remote.slice(0, 4).map((u: any) => (
+                  {remote.map((u: any) => (
                     <div key={u.id} className="flex flex-col items-center gap-1">
                       <span className="relative inline-flex">
                         <Av name={u.name} url={u.profilePictureUrl} size={36} />
