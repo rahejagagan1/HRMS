@@ -12,7 +12,7 @@ import { isAfterSendTime, getWeekKey } from "@/lib/hr/pulse-week";
 import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { isExitSurveyDue } from "@/lib/hr/exit-survey";
 import { isPastLastWorkingDay } from "@/lib/hr/exit-access";
-import { dayBars } from "@/lib/hr/day-rules";
+import { dayBars, lateCutoffMinFor } from "@/lib/hr/day-rules";
 import { shortLeaveDayState, resolveShortLeaveDayStatus } from "@/lib/hr/short-leave";
 
 // Same shape as the clock-in body. Optional here because legacy
@@ -241,6 +241,16 @@ export async function POST(req: NextRequest) {
           activeMin: slState.activeMin, rejectedMin: slState.rejectedMin,
           prevStatus: existing.status,
         });
+        // Cosmetic-LATE repair: a MORNING short leave moves the late cutoff
+        // by 2h — if the clock-in was inside the shifted window, a "late"
+        // stamped by a short-leave-unaware clock-in (older build, or leave
+        // applied after arriving) is wrong; clear it here so the day
+        // self-heals at clock-out regardless of approval ordering.
+        if (status === "late" && slState.morningActiveMin > 0 && existing.clockIn) {
+          const cutoff = lateCutoffMinFor(today, dayShift, { morningShortLeaveMinutes: slState.morningActiveMin });
+          const istIn = new Date(new Date(existing.clockIn).getTime() + 330 * 60000);
+          if (istIn.getUTCHours() * 60 + istIn.getUTCMinutes() <= cutoff) status = "present";
+        }
       } else if (totalMinutes >= fullBarMin) status = existing.status === "late" ? "late" : "present";
       else if (totalMinutes >= halfBarMin) status = "half_day";
       const overtimeMinutes = Math.max(0, totalMinutes - fullBarMin);

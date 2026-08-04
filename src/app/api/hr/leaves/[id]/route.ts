@@ -10,9 +10,9 @@ import { isSingleStageApprovalEmployee } from "@/lib/hr/single-stage-approval";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 import {
   isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, SHORT_LEAVE_MONTHLY_CAP,
-  shortLeaveDayState, resolveShortLeaveDayStatus,
+  SHORT_LEAVE_MINUTES, shortLeaveDayState, resolveShortLeaveDayStatus,
 } from "@/lib/hr/short-leave";
-import { dayBars } from "@/lib/hr/day-rules";
+import { dayBars, lateCutoffMinFor } from "@/lib/hr/day-rules";
 import { istMonthRange } from "@/lib/ist-date";
 
 // After approving a HALF-day leave: if the OTHER half of the same date is
@@ -55,7 +55,7 @@ async function settleFullyCoveredHalfDay(
 async function settleShortLeaveDay(userId: number, dateOnly: Date): Promise<void> {
   const row = await prisma.attendance.findUnique({
     where: { userId_date: { userId, date: dateOnly } },
-    select: { id: true, status: true, isRegularized: true, totalMinutes: true, clockOut: true, notes: true },
+    select: { id: true, status: true, isRegularized: true, totalMinutes: true, clockIn: true, clockOut: true, notes: true },
   });
   if (!row || row.isRegularized || !row.clockOut) return;
   if (!["present", "late", "half_day", "short_lop"].includes(row.status)) return;
@@ -78,12 +78,28 @@ async function settleShortLeaveDay(userId: number, dateOnly: Date): Promise<void
     userId,
   );
   const bars = dayBars(dateOnly, shiftRows[0] ?? null);
-  const next = resolveShortLeaveDayStatus({
+  let next = resolveShortLeaveDayStatus({
     worked: row.totalMinutes ?? 0,
     fullBar: bars.full, halfBar: bars.half,
     activeMin: state.activeMin, rejectedMin: state.rejectedMin,
     prevStatus: row.status,
   });
+  // Cosmetic-LATE repair: an approved MORNING short leave moves the late
+  // cutoff by 2h/slot — if the actual clock-in was inside that shifted
+  // window, the "late" stamped by an unaware clock-in (older build, or the
+  // leave applied after arriving) is wrong. Clear it to present.
+  if (next === "late" && row.clockIn) {
+    const morningApproved = slRows.filter((l) =>
+      l.status === "approved" && /\[\s*short\s*leave\s*[-–:]?\s*morning\s*\]/i.test(l.reason ?? "")).length;
+    if (morningApproved > 0) {
+      const cutoff = lateCutoffMinFor(dateOnly, shiftRows[0] ?? null, {
+        morningShortLeaveMinutes: morningApproved * SHORT_LEAVE_MINUTES,
+      });
+      const istIn = new Date(new Date(row.clockIn).getTime() + 330 * 60000);
+      const inMin = istIn.getUTCHours() * 60 + istIn.getUTCMinutes();
+      if (inMin <= cutoff) next = "present";
+    }
+  }
   if (next !== row.status) {
     await prisma.attendance.update({
       where: { id: row.id },

@@ -101,15 +101,19 @@ export function shortLeaveExcuseMinutes(reasons: Array<string | null | undefined
  *  is honoured provisionally — the decision handlers re-settle the day). */
 export function shortLeaveDayState(rows: Array<{ reason: string | null; status: string }>): {
   appliedAny: boolean; activeMin: number; rejectedMin: number;
+  /** Minutes from live MORNING slots only — shifts the late cutoff. */
+  morningActiveMin: number;
 } {
-  let activeMin = 0, rejectedMin = 0, appliedAny = false;
+  let activeMin = 0, rejectedMin = 0, morningActiveMin = 0, appliedAny = false;
   for (const r of rows) {
     if (!isShortLeaveReason(r.reason)) continue;
     appliedAny = true;
-    if (["pending", "partially_approved", "approved"].includes(r.status)) activeMin += SHORT_LEAVE_MINUTES;
-    else if (r.status === "rejected") rejectedMin += SHORT_LEAVE_MINUTES;
+    if (["pending", "partially_approved", "approved"].includes(r.status)) {
+      activeMin += SHORT_LEAVE_MINUTES;
+      if (shortLeaveSlot(r.reason) === "morning") morningActiveMin += SHORT_LEAVE_MINUTES;
+    } else if (r.status === "rejected") rejectedMin += SHORT_LEAVE_MINUTES;
   }
-  return { appliedAny, activeMin, rejectedMin };
+  return { appliedAny, activeMin, rejectedMin, morningActiveMin };
 }
 
 /** Status a clocked-out short-leave day should carry. `prevStatus` is kept
