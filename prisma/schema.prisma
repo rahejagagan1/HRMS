@@ -1442,7 +1442,7 @@ model Attendance {
   clockIn         DateTime?
   clockOut        DateTime?
   totalMinutes    Int       @default(0)
-  status          String    @default("absent") // present | absent | late | half_day | on_leave | weekend | holiday | lop | half_day_lop | missed_clock_out
+  status          String    @default("absent") // present | absent | late | half_day | on_leave | weekend | holiday | lop | half_day_lop | short_lop (¼-day short-leave penalty) | missed_clock_out
   overtimeMinutes Int       @default(0)
   ipAddress       String?
   location        String?

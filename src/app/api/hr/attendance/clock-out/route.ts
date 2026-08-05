@@ -12,7 +12,8 @@ import { isAfterSendTime, getWeekKey } from "@/lib/hr/pulse-week";
 import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { isExitSurveyDue } from "@/lib/hr/exit-survey";
 import { isPastLastWorkingDay } from "@/lib/hr/exit-access";
-import { dayBars } from "@/lib/hr/day-rules";
+import { dayBars, lateCutoffMinFor } from "@/lib/hr/day-rules";
+import { shortLeaveDayState, resolveShortLeaveDayStatus } from "@/lib/hr/short-leave";
 
 // Same shape as the clock-in body. Optional here because legacy
 // callers (cron sweeper, integration tests, anyone POSTing an empty
@@ -162,6 +163,15 @@ export async function POST(req: NextRequest) {
     } catch { /* columns missing pre-migrate → defaults apply */ }
     const { full: fullBarMin, half: halfBarMin } = dayBars(today, dayShift);
 
+    // Today's short-leave applications (any status): a live one (pending /
+    // partially approved / approved) lowers the required bar by 2h per slot;
+    // a rejected one earns the softer ¼-day band. The approve/reject
+    // handlers re-settle the day if a decision lands after this punch.
+    const slState = shortLeaveDayState(await prisma.leaveApplication.findMany({
+      where: { userId, fromDate: { lte: today }, toDate: { gte: today } },
+      select: { reason: true, status: true },
+    }));
+
     // ── Multi-session clock-out ─────────────────────────────────────────
     // Find today's row + currently-open session, close that session, then
     // recompute the parent row's totalMinutes from the SUM of every closed
@@ -221,8 +231,27 @@ export async function POST(req: NextRequest) {
       // shift-length when Saturday hours are defined — see fullBarMin
       // above). ≥ half the bar but under it → half_day. "late" is
       // preserved when the employee still completed the full bar.
+      // Short-leave days go through the shared resolver: a live short
+      // leave lowers the bar by 2h/slot; a rejected one prices the
+      // [bar−2h, bar) band at ¼ day (short_lop) instead of the half day.
       let status = existing.status;
-      if (totalMinutes >= fullBarMin) status = existing.status === "late" ? "late" : "present";
+      if (slState.appliedAny) {
+        status = resolveShortLeaveDayStatus({
+          worked: totalMinutes, fullBar: fullBarMin, halfBar: halfBarMin,
+          activeMin: slState.activeMin, rejectedMin: slState.rejectedMin,
+          prevStatus: existing.status,
+        });
+        // Cosmetic-LATE repair: a MORNING short leave moves the late cutoff
+        // by 2h — if the clock-in was inside the shifted window, a "late"
+        // stamped by a short-leave-unaware clock-in (older build, or leave
+        // applied after arriving) is wrong; clear it here so the day
+        // self-heals at clock-out regardless of approval ordering.
+        if (status === "late" && slState.morningActiveMin > 0 && existing.clockIn) {
+          const cutoff = lateCutoffMinFor(today, dayShift, { morningShortLeaveMinutes: slState.morningActiveMin });
+          const istIn = new Date(new Date(existing.clockIn).getTime() + 330 * 60000);
+          if (istIn.getUTCHours() * 60 + istIn.getUTCMinutes() <= cutoff) status = "present";
+        }
+      } else if (totalMinutes >= fullBarMin) status = existing.status === "late" ? "late" : "present";
       else if (totalMinutes >= halfBarMin) status = "half_day";
       const overtimeMinutes = Math.max(0, totalMinutes - fullBarMin);
 

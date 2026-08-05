@@ -26,6 +26,15 @@ export const SHORT_LEAVE_MINUTES = 120;
 export const SHORT_LEAVE_MONTHLY_CAP = 2;
 /** The leave-type code short leave always draws from. */
 export const SHORT_LEAVE_TYPE_CODE = "CL";
+/** Minimum day length (the shift's full bar, minutes) for a short leave to
+ *  be allowed — at least 2h of real work must remain after the 2h excuse.
+ *  Blocks e.g. a 2–3h Saturday, allows the 6h Saturday (needs 4h worked). */
+export const MIN_SHORT_LEAVE_BAR_MIN = 240;
+/** Attendance status for the ¼-day short-leave penalty (rejected short leave
+ *  worked ≥ bar−2h but < bar, or a missed clock-out on a short-leave day). */
+export const SHORT_LOP_STATUS = "short_lop";
+/** LOP days the short_lop status charges in payroll. */
+export const SHORT_LOP_DAYS = 0.25;
 
 const MARKER_RE = /\[\s*short\s*leave\s*[-–:]?\s*(morning|evening)?\s*\]/i;
 
@@ -68,4 +77,59 @@ export function shortLeaveExcuseMinutes(reasons: Array<string | null | undefined
   let mins = 0;
   for (const r of reasons) if (isShortLeaveReason(r)) mins += SHORT_LEAVE_MINUTES;
   return mins;
+}
+
+// ── Day-level short-leave state + status pricing ─────────────────────────
+// The SINGLE decision table for what a short-leave day's attendance status
+// should be, shared by clock-out (live stamping), the leave approve/reject
+// handlers (post-day re-settle) and auto-LOP — so a page, the payslip and
+// the pre-check can never disagree. Agreed rules (2026-08-04, Gagan):
+//   • A short leave lowers the day's required bar by 2h per slot.
+//   • Applied + approved + worked ≥ (bar − excuse)     → full day, no penalty.
+//   • Applied + REJECTED + worked ≥ (bar − excuse)     → ¼-day penalty
+//     (short_lop) — they followed process, softer than the 0.5 half day.
+//   • Below the reduced bar the normal bands apply with the approved excuse
+//     credited: (worked + approved excuse) ≥ half bar → half_day, else the
+//     row keeps its prior status (absent handling stays auto-LOP's job).
+//   • Missed clock-out on a day with ANY short-leave application (even a
+//     rejected one) → ¼ day instead of the standard ½ (priced in auto-LOP +
+//     lop-integrity, not here).
+//   • CL once approved stays spent regardless of the day's outcome.
+
+/** Aggregate a day's short-leave applications into excuse minutes.
+ *  `active` = pending / partially_approved / approved (an undecided request
+ *  is honoured provisionally — the decision handlers re-settle the day). */
+export function shortLeaveDayState(rows: Array<{ reason: string | null; status: string }>): {
+  appliedAny: boolean; activeMin: number; rejectedMin: number;
+  /** Minutes from live MORNING slots only — shifts the late cutoff. */
+  morningActiveMin: number;
+} {
+  let activeMin = 0, rejectedMin = 0, morningActiveMin = 0, appliedAny = false;
+  for (const r of rows) {
+    if (!isShortLeaveReason(r.reason)) continue;
+    appliedAny = true;
+    if (["pending", "partially_approved", "approved"].includes(r.status)) {
+      activeMin += SHORT_LEAVE_MINUTES;
+      if (shortLeaveSlot(r.reason) === "morning") morningActiveMin += SHORT_LEAVE_MINUTES;
+    } else if (r.status === "rejected") rejectedMin += SHORT_LEAVE_MINUTES;
+  }
+  return { appliedAny, activeMin, rejectedMin, morningActiveMin };
+}
+
+/** Status a clocked-out short-leave day should carry. `prevStatus` is kept
+ *  for the full-bar case (preserves "late") and the under-half fallthrough. */
+export function resolveShortLeaveDayStatus(opts: {
+  worked: number; fullBar: number; halfBar: number;
+  activeMin: number; rejectedMin: number; prevStatus: string;
+}): string {
+  const { worked, fullBar, halfBar, activeMin, rejectedMin, prevStatus } = opts;
+  if (worked >= fullBar) return prevStatus === "late" ? "late" : "present";
+  if (activeMin > 0 && worked >= fullBar - activeMin) {
+    return prevStatus === "late" ? "late" : "present"; // excused full day
+  }
+  if (rejectedMin > 0 && worked >= fullBar - activeMin - rejectedMin) {
+    return SHORT_LOP_STATUS; // rejected concession band → ¼ day
+  }
+  if (worked + activeMin >= halfBar) return "half_day";
+  return prevStatus; // under half bar — same fallthrough as a normal day
 }

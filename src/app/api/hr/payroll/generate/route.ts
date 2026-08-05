@@ -9,7 +9,8 @@ import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWor
 // POST /api/hr/payroll/generate — produce draft payslips for a payroll run.
 // Math model:
 //   workingDays  = calendar days in run.month (28 / 30 / 31)
-//   lopDays      = absent + lop + 0.5 × (half_day + half_day_lop) + unpaid-leave weekdays in month
+//   lopDays      = absent + lop + 0.5 × (half_day + half_day_lop)
+//                  + 0.25 × short_lop (short-leave concession) + unpaid-leave weekdays in month
 //                  (a single-date HALF-day unpaid leave counts 0.5, not 1)
 //   paidDays     = workingDays − pre-joining days − lopDays   (mid-month joiners
 //                  are paid from EmployeeProfile.joiningDate; exits are capped
@@ -172,14 +173,14 @@ export async function POST(req: NextRequest) {
       where: {
         userId: { in: userIds },
         date:   { gte: firstDay, lte: lastDay },
-        status: { in: ["absent", "lop", "half_day", "half_day_lop"] },
+        status: { in: ["absent", "lop", "half_day", "half_day_lop", "short_lop"] },
         isRegularized: false,
       },
       _count: { _all: true },
     }) : [];
-    const attnByUser = new Map<number, { absent: number; lop: number; half_day: number; half_day_lop: number }>();
+    const attnByUser = new Map<number, { absent: number; lop: number; half_day: number; half_day_lop: number; short_lop: number }>();
     for (const g of attnGroups) {
-      const bucket = attnByUser.get(g.userId) ?? { absent: 0, lop: 0, half_day: 0, half_day_lop: 0 };
+      const bucket = attnByUser.get(g.userId) ?? { absent: 0, lop: 0, half_day: 0, half_day_lop: 0, short_lop: 0 };
       (bucket as Record<string, number>)[g.status] = g._count._all;
       attnByUser.set(g.userId, bucket);
     }
@@ -323,6 +324,9 @@ export async function POST(req: NextRequest) {
       // charge — worked half + paid-leave half = fully paid day.
       const halfDayCount    = Math.max(0, (attn?.half_day ?? 0) - (excusedHalfByUser.get(s.userId) ?? 0));
       const halfDayLopCount = attn?.half_day_lop ?? 0;
+      // short_lop = 0.25 (short-leave concession: rejected short leave worked
+      // ≥ bar−2h, or a missed clock-out on a short-leave day).
+      const shortLopCount   = attn?.short_lop ?? 0;
 
       const unpaidLeaves = unpaidLeavesByUser.get(s.userId) ?? [];
       let unpaidLeaveDays = 0;
@@ -343,8 +347,8 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const lopDays    = absentCount + lopCount + (halfDayCount + halfDayLopCount) * 0.5 + unpaidLeaveDays
-        + (missedSwipeByUser.get(s.userId) ?? 0);
+      const lopDays    = absentCount + lopCount + (halfDayCount + halfDayLopCount) * 0.5 + shortLopCount * 0.25
+        + unpaidLeaveDays + (missedSwipeByUser.get(s.userId) ?? 0);
       // Cap the paid-day ceiling at the last working day for anyone exiting
       // this run month — days after the LWD are not worked, so they're unpaid.
       // (LWD in a later month → full month; no exit → full month.)

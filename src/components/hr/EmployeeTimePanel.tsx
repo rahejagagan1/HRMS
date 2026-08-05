@@ -1085,13 +1085,15 @@ export function EmployeeTimePanel({
               const isToday   = dateOnly === today.toISOString().slice(0, 10);
               const isWeekend = rec.status === "weekly_off";
               const isHoliday = rec.status === "holiday";
-              const isPresent = rec.status === "present" || rec.status === "late" || rec.status === "half_day";
+              const isPresent = rec.status === "present" || rec.status === "late" || rec.status === "half_day" || rec.status === "short_lop";
               // LOP penalties from the auto-LOP job — surfaced so HR (and the
               // employee) can see the day was docked. full = absence, half =
-              // unregularized missed clock-out.
+              // unregularized missed clock-out, short = ¼-day short-leave
+              // shortfall (rejected short leave / missed punch on an SL day).
               const isFullLop    = rec.status === "lop";
               const isHalfDayLop = rec.status === "half_day_lop";
-              const isLop        = isFullLop || isHalfDayLop;
+              const isShortLop   = rec.status === "short_lop";
+              const isLop        = isFullLop || isHalfDayLop || isShortLop;
 
               const reg   = regByDate.get(dateOnly);
               const wfh   = wfhByDate.get(dateOnly);
@@ -1109,10 +1111,25 @@ export function EmployeeTimePanel({
                 leave ? (/\[first\s+half\]/i.test(leave.reason ?? "") ? "first" : /\[second\s+half\]/i.test(leave.reason ?? "") ? "second" : null) : null;
               const wfhHalfDir: "first" | "second" | null =
                 wfh ? (/\[first\s+half\]/i.test(wfh.reason ?? "") ? "first" : /\[second\s+half\]/i.test(wfh.reason ?? "") ? "second" : null) : null;
+              // Short leave(s) on this date — a 2h excuse, NOT a day off. The
+              // day keeps its normal timeline; the violet tag below says so.
+              const SL_RE = /\[\s*short\s*leave\s*[-–:]?\s*(morning|evening)?\s*\]/i;
+              const dayShortLeaves = userLeaves.filter((l: any) => {
+                if (l.status === "rejected" || l.status === "cancelled") return false;
+                const from = String(l.fromDate).slice(0, 10);
+                const to   = String(l.toDate).slice(0, 10);
+                return dateOnly >= from && dateOnly <= to && SL_RE.test(l.reason ?? "");
+              });
+              const shortLeaveSlots = dayShortLeaves
+                .map((l: any) => (SL_RE.exec(l.reason ?? "")?.[1] ?? "").toLowerCase())
+                .filter(Boolean)
+                .map((s: string) => s === "evening" ? "Evening" : "Morning");
               // A FULL-day leave renders as the centered "On <X> Leave" banner and
               // hides the timeline. A HALF-day leave does NOT — the employee works
               // the other half, so keep the timeline and show BOTH segments.
-              const isLeaveRow = (rec.status === "on_leave" || isLeaveApproved) && !leaveHalfDir;
+              // A SHORT leave doesn't either — it's a working day minus 2h.
+              const isLeaveRow = (rec.status === "on_leave" || isLeaveApproved) && !leaveHalfDir
+                && !(leave && SL_RE.test(leave.reason ?? ""));
               // Both-segment label for a split day (half-day leave and/or half WFH):
               // each half is the leave type / WFH / (expected) Office.
               // A day can carry TWO half-day leaves (e.g. 1st-half Sick +
@@ -1246,8 +1263,19 @@ export function EmployeeTimePanel({
                       {/* Waived (isRegularized via the audited LOP-waive flow) →
                           the penalty no longer charges in payroll, so don't show
                           the red LOP chip for it — show a calm "LOP waived". */}
-                      {isLop && !rec.isRegularized ? <span className="inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700">{isHalfDayLop ? "½ Day LOP" : "LOP"}</span> : null}
+                      {isLop && !rec.isRegularized ? <span title={isShortLop ? "Short-leave shortfall — ¼ day LOP in payroll" : undefined} className="inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-red-700">{isShortLop ? "¼ Day LOP" : isHalfDayLop ? "½ Day LOP" : "LOP"}</span> : null}
                       {isLop && rec.isRegularized ? <span title="Penalty waived — this day is fully paid" className="inline-flex items-center rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-700">LOP waived</span> : null}
+                      {/* Short-leave tag — distinct from ½ Day so nobody reads a
+                          2h excuse as a half-day leave. Shows on HR, developer
+                          and the employee's own attendance log alike. */}
+                      {dayShortLeaves.length > 0 ? (
+                        <span
+                          title={`Short leave (${shortLeaveSlots.join(" + ") || "2h"}) — 2 hours excused per slot; the required day drops by 2h each`}
+                          className="inline-flex items-center rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-700"
+                        >
+                          Short Leave{shortLeaveSlots.length ? ` · ${shortLeaveSlots.join(" + ")}` : ""}
+                        </span>
+                      ) : null}
                       {/* Under-9h day that clocked out but wasn't regularised —
                           payroll counts it as ½ day (0.5 LOP). Surface it loudly
                           so HR doesn't mistake the "completed punch" ✓ for a full
@@ -1325,6 +1353,7 @@ export function EmployeeTimePanel({
                       : isWeekend       ? "Full day Weekly-off"
                       : isHoliday       ? (rec.notes || "Public Holiday")
                       : isHalfDayLop    ? "Half-day LOP — missed clock-out not regularized in time"
+                      : isShortLop      ? "¼-day LOP — short-leave day shortfall"
                       : isFullLop       ? "Full-day LOP — absent, no attendance logged"
                       : isRegPending    ? `Regularization Pending${regWindow ? ` · ${regWindow}` : ""}`
                       : isRegApproved   ? `Regularized${regWindow ? ` · ${regWindow}` : ""}`
@@ -1537,7 +1566,7 @@ export function EmployeeTimePanel({
                           ½ Day
                         </span>
                       )
-                    ) : isPresent ? (
+                    ) : isPresent && !isShortLop ? (
                       <span
                         title="Clock-in completed"
                         className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-200 shadow-[0_1px_2px_rgba(16,185,129,0.18)]"
@@ -1553,11 +1582,11 @@ export function EmployeeTimePanel({
                       </span>
                     ) : isLop ? (
                       <span
-                        title={isHalfDayLop ? "Half-day LOP — missed clock-out not regularized in time" : "Full-day LOP — absent, no attendance logged"}
+                        title={isShortLop ? "¼-day LOP — short-leave day shortfall" : isHalfDayLop ? "Half-day LOP — missed clock-out not regularized in time" : "Full-day LOP — absent, no attendance logged"}
                         className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-700 ring-1 ring-inset ring-red-200"
                       >
                         <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
-                        {isHalfDayLop ? "½ LOP" : "LOP"}
+                        {isShortLop ? "¼ LOP" : isHalfDayLop ? "½ LOP" : "LOP"}
                       </span>
                     ) : rec.status === "absent" ? (
                       // Absent day → render a "Regularize" affordance instead

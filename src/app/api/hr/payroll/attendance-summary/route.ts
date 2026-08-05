@@ -85,6 +85,7 @@ export async function GET(req: NextRequest) {
         lop:          { reason: "Auto-LOP (absent)",   weight: 1 },
         half_day:     { reason: "Half day",            weight: 0.5 },
         half_day_lop: { reason: "Auto-LOP (half day)", weight: 0.5 },
+        short_lop:    { reason: "Short-leave shortfall (¼ day)", weight: 0.25 },
       };
       const ymd = (d: Date) => new Date(d).toISOString().slice(0, 10);
 
@@ -100,7 +101,7 @@ export async function GET(req: NextRequest) {
            JOIN "User" u ON u.id = a."userId"
       LEFT JOIN "EmployeeProfile" ep ON ep."userId" = a."userId"
           WHERE a.date >= $1 AND a.date <= $2
-            AND a.status IN ('absent', 'lop', 'half_day', 'half_day_lop')
+            AND a.status IN ('absent', 'lop', 'half_day', 'half_day_lop', 'short_lop')
             AND a."isRegularized" = FALSE
             ${brandClause}
           ORDER BY a."userId", a.date ASC`,

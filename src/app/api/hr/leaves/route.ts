@@ -10,8 +10,9 @@ import { sendEmail } from "@/lib/email/sender";
 import { pocAssignmentEmail } from "@/lib/email/templates";
 import {
   isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS,
-  SHORT_LEAVE_MONTHLY_CAP, type ShortLeaveSlot,
+  SHORT_LEAVE_MONTHLY_CAP, MIN_SHORT_LEAVE_BAR_MIN, type ShortLeaveSlot,
 } from "@/lib/hr/short-leave";
+import { dayBars } from "@/lib/hr/day-rules";
 import { istMonthRange } from "@/lib/ist-date";
 
 // GET /api/hr/leaves — list leave applications
@@ -263,6 +264,19 @@ export async function POST(req: NextRequest) {
         { error: "Shift not assigned — please contact the HR department." },
         { status: 400 },
       );
+    }
+
+    // Short leave needs a long-enough day: the day's full bar (Saturday-aware
+    // — a 6h working Saturday's bar is 6h) must leave at least 2h of real
+    // work after the 2h excuse. Blocks short leave on e.g. a 2–3h Saturday.
+    if (shortLeave) {
+      const bar = dayBars(from, subjectShift!.shift as any).full;
+      if (bar < MIN_SHORT_LEAVE_BAR_MIN) {
+        return NextResponse.json(
+          { error: `This day's shift is only ${Math.round(bar / 60 * 10) / 10}h — too short for a 2-hour short leave (needs a ${MIN_SHORT_LEAVE_BAR_MIN / 60}h+ day).` },
+          { status: 400 },
+        );
+      }
     }
 
     // Short leave — max SHORT_LEAVE_MONTHLY_CAP per calendar month per person.

@@ -1,5 +1,6 @@
 import prisma from "@/lib/prisma";
 import { ACTIVE_REQUEST_STATUSES, OPEN_REQUEST_STATUSES, HALF_MARKER_RE, dayBars, isWorkingDayForShift } from "@/lib/hr/day-rules";
+import { isShortLeaveReason, SHORT_LEAVE_MINUTES, SHORT_LOP_DAYS } from "@/lib/hr/short-leave";
 
 /**
  * LOP integrity engine — the single place that prices UNRESOLVED attendance
@@ -141,7 +142,16 @@ export async function priceMissedSwipes(opts: {
   const [shifts, leaves, regs, wfhs, ods, compOffs, holidays] = await Promise.all([
     shiftContextForUsers(affectedIds),
     prisma.leaveApplication.findMany({
-      where: { userId: { in: affectedIds }, fromDate: { lte: lastDay }, toDate: { gte: firstDay }, status: { in: ACTIVE } },
+      // Rejected SHORT leaves ride along: the "applied" fact alone softens a
+      // missed-swipe charge to ¼ day (agreed 2026-08-04), so pricing must
+      // see them even though rejected rows grant no leave.
+      where: {
+        userId: { in: affectedIds }, fromDate: { lte: lastDay }, toDate: { gte: firstDay },
+        OR: [
+          { status: { in: ACTIVE } },
+          { status: "rejected", reason: { contains: "[Short Leave", mode: "insensitive" } },
+        ],
+      },
       select: { userId: true, status: true, reason: true, fromDate: true, toDate: true, totalDays: true, leaveType: { select: { name: true } } },
     }),
     prisma.attendanceRegularization.findMany({
@@ -201,6 +211,20 @@ export async function priceMissedSwipes(opts: {
       out.push({ ...base, charge: 0, reason: "Covered by approved regularization / OD / comp-off" });
       continue;
     }
+    // Short-leave day: a forgotten punch costs ¼ day instead of ½ — the
+    // application (even a rejected one) shows intent. When the APPROVED
+    // excuse plus recorded minutes already cover the reduced bar, the row
+    // is a stale artefact like the ghost-session case: free, but flagged.
+    const slRows = dayLeaves.filter((l) => isShortLeaveReason(l.reason));
+    if (slRows.length > 0) {
+      const approvedMin = slRows.filter((l) => l.status === "approved").length * SHORT_LEAVE_MINUTES;
+      if (approvedMin > 0 && worked >= bars.full - approvedMin) {
+        out.push({ ...base, charge: 0, reason: "Short leave honored — reduced day completed; stale missed-clock-out status", pendingDecision: "stale_status" });
+      } else {
+        out.push({ ...base, charge: SHORT_LOP_DAYS, reason: "Missed clock-out on a short-leave day (auto ¼ day)" });
+      }
+      continue;
+    }
     const halfLeave = dayLeaves.find((l) => HALF_MARKER_RE.test(String(l.reason ?? "")) && Number(l.totalDays) <= 0.5);
     const fullLeave = dayLeaves.find((l) => !(HALF_MARKER_RE.test(String(l.reason ?? "")) && Number(l.totalDays) <= 0.5));
     if (fullLeave) {
@@ -241,6 +265,7 @@ export async function findTamperedRows(opts: { firstDay: Date; lastDay: Date; us
         AND (
               (a.notes ILIKE 'Auto-marked half-day LOP%' AND a.status <> 'half_day_lop')
            OR (a.notes ILIKE 'Auto-marked LOP%'          AND a.status <> 'lop')
+           OR (a.notes ILIKE 'Auto-marked quarter-day LOP%' AND a.status <> 'short_lop')
            OR (a.notes ILIKE 'Auto-LOP:%half-day%'       AND a.status NOT IN ('half_day_lop'))
            OR (a.notes ILIKE 'Auto-LOP: approved full-day%' AND a.status <> 'lop')
         )
@@ -254,7 +279,8 @@ export async function findTamperedRows(opts: { firstDay: Date; lastDay: Date; us
     date: ymd(r.date),
     status: r.status,
     note: r.notes,
-    expectedStatus: /^Auto-marked LOP|^Auto-LOP: approved full-day/i.test(r.notes) ? "lop" : "half_day_lop",
+    expectedStatus: /^Auto-marked quarter-day LOP/i.test(r.notes) ? "short_lop"
+      : /^Auto-marked LOP|^Auto-LOP: approved full-day/i.test(r.notes) ? "lop" : "half_day_lop",
   }));
 }
 

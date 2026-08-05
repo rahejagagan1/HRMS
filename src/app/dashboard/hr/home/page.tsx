@@ -189,26 +189,27 @@ function Av({ name, url, size = 40 }: { name: string; url?: string | null; size?
 //   full         → solid blue circle (full-day leave)
 //   first_half   → left half blue   (first-half leave)
 //   second_half  → right half blue  (second-half leave)
-function LeaveBadge({ kind }: { kind: "full" | "first_half" | "second_half" }) {
+//   short        → violet quarter-wedge (2h short leave — working today, not
+//                  a day off; tooltip carries the Morning/Evening slot)
+function LeaveBadge({ kind, slots }: { kind: "full" | "first_half" | "second_half" | "short"; slots?: string | null }) {
   const BLUE = "#008CFF";
+  const VIOLET = "#7c3aed";
+  const label =
+    kind === "short" ? `Short leave${slots ? ` (${slots})` : ""} — 2h excused, working today` :
+    kind === "full" ? "On full-day leave" :
+    kind === "first_half" ? "On first-half leave" :
+    "On second-half leave";
   return (
     <span
-      aria-label={
-        kind === "full" ? "On full-day leave" :
-        kind === "first_half" ? "On first-half leave" :
-        "On second-half leave"
-      }
-      title={
-        kind === "full" ? "On full-day leave" :
-        kind === "first_half" ? "On first-half leave" :
-        "On second-half leave"
-      }
+      aria-label={label}
+      title={label}
       className="absolute -top-0.5 -right-0.5 inline-flex h-[14px] w-[14px] items-center justify-center rounded-full border-2 border-white bg-white shadow-sm overflow-hidden"
     >
       <svg viewBox="0 0 10 10" className="w-full h-full">
         {kind === "full"        && <circle cx="5" cy="5" r="5" fill={BLUE} />}
         {kind === "first_half"  && <path d="M 5 0 A 5 5 0 0 0 5 10 Z" fill={BLUE} />}
         {kind === "second_half" && <path d="M 5 0 A 5 5 0 0 1 5 10 Z" fill={BLUE} />}
+        {kind === "short"       && <><circle cx="5" cy="5" r="5" fill="#ede9fe" /><path d="M 5 5 L 5 0 A 5 5 0 0 1 10 5 Z" fill={VIOLET} /></>}
       </svg>
     </span>
   );
@@ -3641,9 +3642,16 @@ export default function HRHomePage() {
                     <div key={u.id} className="flex flex-col items-center gap-1">
                       <span className="relative inline-flex">
                         <Av name={u.name} url={u.profilePictureUrl} size={36} />
-                        <LeaveBadge kind={u.leaveKind ?? "full"} />
+                        <LeaveBadge kind={u.leaveKind ?? "full"} slots={u.shortLeaveSlots} />
                       </span>
                       <span className={`w-11 truncate text-center text-[9.5px] ${C.t3}`}>{u.name.split(" ")[0]}</span>
+                      {/* Short leave ≠ a day off — say so under the avatar so
+                          nobody reads a 2h excuse as a one-day leave. */}
+                      {u.leaveKind === "short" && (
+                        <span className="text-[8.5px] font-semibold leading-none text-violet-600">
+                          Short{u.shortLeaveSlots ? ` · ${u.shortLeaveSlots}` : ""}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

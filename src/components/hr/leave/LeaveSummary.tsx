@@ -47,6 +47,23 @@ function halfOf(reason: string): "First" | "Second" | null {
   if (/^\[Second Half\]/i.test(reason || "")) return "Second";
   return null;
 }
+
+// "[Short Leave - Morning/Evening]" marker → slot label, or null. Drives the
+// violet tag so a 0.25-day short leave never reads as a half/full-day leave.
+function shortSlotOf(reason: string): "Morning" | "Evening" | null {
+  const m = /\[\s*short\s*leave\s*[-–:]?\s*(morning|evening)?\s*\]/i.exec(reason || "");
+  if (!m) return null;
+  return (m[1] ?? "").toLowerCase() === "evening" ? "Evening" : "Morning";
+}
+
+const ShortLeaveTag = ({ slot }: { slot: "Morning" | "Evening" }) => (
+  <span
+    title={`Short leave (${slot}) — 2 hours excused, costs 0.25 day`}
+    className="ml-1.5 inline-flex items-center rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-violet-700 align-middle"
+  >
+    Short Leave · {slot}
+  </span>
+);
 function cleanNote(reason: string): string {
   return (reason || "").replace(/^\[(First|Second) Half\]\s*/i, "");
 }
@@ -234,7 +251,10 @@ export default function LeaveSummary({
                   </div>
                   <div className="min-w-[120px]">
                     <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Leave Type</span>
-                    <span className="text-[13px] text-slate-800">{a.leaveType?.name}</span>
+                    <span className="text-[13px] text-slate-800">
+                      {a.leaveType?.name}
+                      {(() => { const s = shortSlotOf(a.reason); return s ? <ShortLeaveTag slot={s} /> : null; })()}
+                    </span>
                   </div>
                   <div className="flex-1 min-w-[120px]">
                     <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Status</span>
@@ -440,7 +460,10 @@ export default function LeaveSummary({
                       <div className="text-[11px] text-slate-400">{fmt(num(a.totalDays))} Day{num(a.totalDays) === 1 ? "" : "s"}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="text-[13px] text-slate-800">{a.leaveType?.name}</div>
+                      <div className="text-[13px] text-slate-800">
+                        {a.leaveType?.name}
+                        {(() => { const s = shortSlotOf(a.reason); return s ? <ShortLeaveTag slot={s} /> : null; })()}
+                      </div>
                       <div className="text-[11px] text-slate-400">Requested on {fmtDate(a.appliedAt, true)}</div>
                     </td>
                     <td className="px-4 py-3">
