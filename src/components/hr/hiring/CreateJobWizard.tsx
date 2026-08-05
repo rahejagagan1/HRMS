@@ -755,7 +755,7 @@ function Step1Description({
             value={form.department}
             onChange={(v) => setField("department", v)}
             options={deptOptions}
-            placeholder="e.g. Content"
+            placeholder="Pick from the list — or type your own"
           />
         </Field>
       </FormGrid>
