@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, isLeadershipOrHR, resolveUserId, serverError } from "@/lib/api-auth";
 import { sanitizeLetterHtml } from "@/lib/hr/letter-render";
+import { repairLetterTemplateStructure } from "@/lib/hr/letter-template-repair";
 
 export const dynamic = "force-dynamic";
 export const runtime  = "nodejs";
@@ -74,7 +75,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ ke
       // server-side so a compromised HR account can't persist an
       // XSS payload in the template body.
       const clean = sanitizeLetterHtml(body.bodyHtml);
-      sets.push(`"bodyHtml" = $${i++}`); args.push(clean);
+      // The visual editor flattens tables / page-breaks / nested lists and
+      // floods the text with non-breaking spaces (it destroyed the NB Media
+      // offer letter twice on 2026-08-05). Every save self-heals: wording
+      // is kept as typed, structural blocks are rebuilt to canon.
+      const repaired = repairLetterTemplateStructure(key, clean);
+      sets.push(`"bodyHtml" = $${i++}`); args.push(repaired);
     }
     if (typeof body.title === "string" && body.title.trim()) {
       sets.push(`"title" = $${i++}`); args.push(body.title.trim());
