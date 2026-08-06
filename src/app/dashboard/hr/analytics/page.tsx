@@ -7,7 +7,7 @@ import Link from "next/link";
 import { parseAttLoc, captureClockInGeo } from "@/lib/attendance-location";
 import { isHRAdmin } from "@/lib/access";
 import { desktopBypassHeader } from "@/lib/desktop-bypass";
-import { wfhKindLabel, wfhKindTitle } from "@/lib/hr/wfh-balance";
+import { wfhKindLabel, wfhKindTitle } from "@/lib/hr/wfh-day-kind";
 import {
   ChevronLeft, ChevronRight, ChevronDown,
   Send, BarChart2, Award, Mail, Users, Calendar,
