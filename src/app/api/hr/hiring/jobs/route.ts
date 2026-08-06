@@ -361,6 +361,17 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ id, status }, { status: 201 });
   } catch (e) {
+    // Duplicate title (job titles are unique) — most often the wizard
+    // colliding with the user's OWN saved draft. Name the fix precisely;
+    // the generic serverError 409 wouldn't know about the Jobs grid.
+    const msg = String((e as any)?.message ?? "");
+    if (msg.includes("23505") && msg.includes("(title)")) {
+      const dup = /Key \(title\)=\((.+?)\) already exists/.exec(msg)?.[1];
+      return NextResponse.json(
+        { error: `A job titled "${dup ?? "this"}" already exists — it may be saved as a draft. Open it in the Jobs grid to edit or publish it, or choose a different title.` },
+        { status: 409 },
+      );
+    }
     return serverError(e, "POST /api/hr/hiring/jobs");
   }
 }

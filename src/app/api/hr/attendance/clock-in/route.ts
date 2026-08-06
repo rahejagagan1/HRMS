@@ -13,7 +13,7 @@ import { resolveClientPunchAt } from "@/lib/hr/punch-time";
 import { writeAuditLog } from "@/lib/audit-log";
 import { SHORT_LEAVE_MINUTES } from "@/lib/hr/short-leave";
 import { isPastLastWorkingDay } from "@/lib/hr/exit-access";
-import { lateCutoffMinFor } from "@/lib/hr/day-rules";
+import { lateCutoffMinFor, shiftTimesFor, halfOf } from "@/lib/hr/day-rules";
 
 // Real GPS coordinates required so the attendance log always has a verifiable
 // physical location. Address is optional and capped to keep payloads small.
@@ -171,10 +171,20 @@ export async function POST(req: NextRequest) {
     // are checked against the YT Labs office coords instead of the NB
     // Media default, so they don't get flagged as "off-site" while
     // sitting at the YT Labs building.
-    const [userShift, profile, approvedWfh, halfLeave, morningShortLeave] = await Promise.all([
+    const [userShift, profile, wfhRows, halfLeave, morningShortLeave] = await Promise.all([
       prisma.userShift.findUnique({ where: { userId }, include: { shift: true } }),
       prisma.employeeProfile.findUnique({ where: { userId }, select: { workLocation: true, businessUnit: true } }),
-      prisma.wFHRequest.findFirst({ where: { userId, date: today, status: "approved" }, select: { id: true, reason: true } }),
+      // EVERY in-flight WFH for today, not just fully-approved ones. The rest
+      // of the app (attendance board, HR dashboard, and this page's own
+      // "WFH Clock-In" button label) counts pending / partially_approved as
+      // WFH intent; requiring "approved" here stored the punch as an OFFICE
+      // clock-in whenever L2 hadn't signed off yet, so the day then read as
+      // "office" while the WFH badge said otherwise. findMany (not findFirst)
+      // so a morning + afternoon pair both inform the half-day checks below.
+      prisma.wFHRequest.findMany({
+        where: { userId, date: today, status: { notIn: ["rejected", "cancelled"] } },
+        select: { id: true, reason: true },
+      }),
       prisma.leaveApplication.findFirst({
         where: { userId, fromDate: { lte: today }, toDate: { gte: today }, status: { in: ["approved", "partially_approved", "pending"] } },
         select: { reason: true },
@@ -202,7 +212,7 @@ export async function POST(req: NextRequest) {
     // start (they still work the first half).
     const isFirstHalfOff =
       /\[first\s+half\]/i.test(halfLeave?.reason ?? "") ||
-      /\[first\s+half\]/i.test(approvedWfh?.reason ?? "");
+      wfhRows.some((w) => /\[first\s+half\]/i.test(w.reason ?? ""));
 
     // Late detection is per-shift: the cutoff is the shift's own startTime
     // plus the grace window the shift defines. The admin shift form labels
@@ -233,7 +243,19 @@ export async function POST(req: NextRequest) {
     }
 
     const wl = (profile?.workLocation || "office").toLowerCase();
-    const isRemote = !!approvedWfh || wl === "remote" || wl === "hybrid";
+    // WFH tags the punch remote only when it covers the HALF the punch falls
+    // in. A [Second Half] WFH means the employee is genuinely in the office
+    // this morning and only goes remote after the shift mid-point — tagging
+    // that morning punch "remote" would misreport where they actually are.
+    // Full-day WFH (no half marker) and both-halves-booked cover everything.
+    const punchHalf: "first" | "second" = userShift?.shift
+      ? (nowMin < shiftTimesFor(today, userShift.shift as any).midMin ? "first" : "second")
+      : (nowMin < 14 * 60 ? "first" : "second");
+    const wfhCoversPunch = wfhRows.some((w) => {
+      const side = halfOf(w.reason);
+      return side === null || side === punchHalf;   // null = full-day WFH
+    });
+    const isRemote = wfhCoversPunch || wl === "remote" || wl === "hybrid";
     // Office geofence — compute distance + atOffice flag now so the
     // attendance dashboard can render a reliable "At Office" badge
     // independent of Nominatim's address text. Brand-aware: YT Labs

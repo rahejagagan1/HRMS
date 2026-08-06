@@ -429,6 +429,14 @@ export function EmployeeTimePanel({
     return map;
   })();
 
+  // Every WFH request for this user, unaggregated. wfhByDate above keeps only
+  // the highest-ranked row per date, which silently hides the second half when
+  // someone books the morning and the afternoon as two requests — the split
+  // label then rendered that half as "Office". Same problem leaves already
+  // solved by scanning all rows (see halfLeaveFor).
+  const userWfh = Array.isArray(wfhData) ? wfhData.filter((w: any) => w.userId === userId) : [];
+  const isLiveReq = (s: string) => s !== "rejected" && s !== "cancelled";
+
   // Leaves are date-RANGES — find the best applicable leave for a given day.
   const userLeaves = leavesData.filter((l: any) => l.userId === userId);
   const findLeaveForDate = (dateOnly: string): any | null => {
@@ -1144,14 +1152,41 @@ export function EmployeeTimePanel({
                   const re = which === "first" ? /\[first\s+half\]/i : /\[second\s+half\]/i;
                   return re.test(l.reason ?? "");
                 });
+              // Same rule for WFH: a day can carry TWO half-day WFH requests
+              // (morning + afternoon applied separately), so check ALL of the
+              // day's rows. Using the single aggregated `wfh` row here made the
+              // uncovered half read "Office" — e.g. both halves booked showed
+              // "1st Half Office · 2nd Half WFH".
+              const halfWfhFor = (which: "first" | "second") =>
+                userWfh.find((w: any) => {
+                  if (!isLiveReq(w.status)) return false;
+                  if (String(w.date).slice(0, 10) !== dateOnly) return false;
+                  const re = which === "first" ? /\[first\s+half\]/i : /\[second\s+half\]/i;
+                  return re.test(w.reason ?? "");
+                });
+              // A WFH with no half marker covers the whole day → both halves.
+              const fullDayWfh = userWfh.find((w: any) =>
+                isLiveReq(w.status)
+                && String(w.date).slice(0, 10) === dateOnly
+                && !/\[(first|second)\s+half\]/i.test(w.reason ?? ""));
               const halfKind = (which: "first" | "second"): string => {
                 const lv = halfLeaveFor(which);
                 if (lv) return lv.leaveType?.name || "Leave";
-                if (wfhHalfDir === which) return "WFH";
+                if (fullDayWfh || halfWfhFor(which)) return "WFH";
                 return "Office";
               };
-              const isSplitDay = !!(leaveHalfDir || wfhHalfDir);
-              const splitLabel = isSplitDay ? `1st Half ${halfKind("first")} · 2nd Half ${halfKind("second")}` : null;
+              const isSplitDay = !!(leaveHalfDir || wfhHalfDir || halfWfhFor("first") || halfWfhFor("second"));
+              // Both halves WFH (and no leave on either) isn't a split at all —
+              // the employee is remote the whole day, so it reads as a FULL day
+              // of WFH. The halves are still named so it's clear the day was
+              // booked as two separate requests.
+              const bothHalvesWfh = !halfLeaveFor("first") && !halfLeaveFor("second")
+                && !!halfWfhFor("first") && !!halfWfhFor("second");
+              const splitLabel = bothHalvesWfh
+                ? "Full Day WFH · 1st + 2nd Half"
+                : isSplitDay
+                  ? `1st Half ${halfKind("first")} · 2nd Half ${halfKind("second")}`
+                  : null;
               // An APPROVED PAID half-day leave pays the non-worked half, so a
               // `half_day` attendance row is a fully-paid day — payroll's
               // half-day excuse (generate route) skips the 0.5 LOP. Drives the

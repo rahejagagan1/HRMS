@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { requireAuth, serverError } from "@/lib/api-auth";
 import { istTodayDateOnly } from "@/lib/ist-date";
 import { getPoliciesByUser } from "@/lib/hr/notification-policy";
+import { wfhDayKind, type WfhDayKind } from "@/lib/hr/wfh-balance";
 
 // Live board — must never be cached (statuses change through the day, and a
 // stale copy shows wrong late/present/leave badges even after the data changes).
@@ -59,22 +60,27 @@ export async function GET() {
         status: { notIn: ["rejected", "cancelled"] },
       },
       select: { userId: true, reason: true },
-      orderBy: { createdAt: "desc" }, // newest request wins for the half-day kind
+      orderBy: { createdAt: "asc" },
     });
     const wfhTodayIds = new Set(wfhTodayRows.map((r) => r.userId));
 
     // Per-user WFH half-day kind for the "Working Remotely" badge. Uses the
     // SAME [First Half]/[Second Half]/[Half Day] markers the leave form writes —
     // the WFH form stamps them into the reason too. (no marker → full)
-    const wfhKindByUser = new Map<number, "full" | "first_half" | "second_half">();
+    //
+    // ALL of a user's rows for the day are folded together: someone who booked
+    // the morning and the afternoon as two requests is remote all day and must
+    // show BOTH halves. Previously only the newest row survived, so the earlier
+    // half vanished from every badge.
+    const wfhReasonsByUser = new Map<number, Array<string | null>>();
     for (const r of wfhTodayRows) {
-      if (wfhKindByUser.has(r.userId)) continue; // newest (first) row wins
-      const reason = r.reason || "";
-      let kind: "full" | "first_half" | "second_half" = "full";
-      if      (/\[First Half\]/i.test(reason))  kind = "first_half";
-      else if (/\[Second Half\]/i.test(reason)) kind = "second_half";
-      else if (/\[Half Day\]/i.test(reason))    kind = "first_half"; // legacy
-      wfhKindByUser.set(r.userId, kind);
+      const arr = wfhReasonsByUser.get(r.userId) ?? [];
+      arr.push(r.reason);
+      wfhReasonsByUser.set(r.userId, arr);
+    }
+    const wfhKindByUser = new Map<number, WfhDayKind>();
+    for (const [userId, reasons] of wfhReasonsByUser) {
+      wfhKindByUser.set(userId, wfhDayKind(reasons));
     }
 
     // Anyone with a leave application that *covers* today, in any status that

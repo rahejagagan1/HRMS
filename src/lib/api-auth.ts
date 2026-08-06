@@ -11,6 +11,25 @@ import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 export function serverError(error: unknown, context: string): NextResponse {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[API Error] ${context}:`, message);
+    // Unique-constraint violations are user-fixable duplicates, not server
+    // faults — say WHAT already exists instead of a blank 500 (2026-08-05:
+    // publishing a job whose title matched its own saved draft surfaced as
+    // "Internal server error"). Two shapes reach us:
+    //   • raw SQL       → message carries PG code 23505 + `Key (col)=(val) already exists`
+    //   • Prisma client → PrismaClientKnownRequestError code P2002 + meta.target
+    const prismaCode = (error as any)?.code;
+    if (message.includes("23505") || prismaCode === "P2002") {
+        const m = /Key \("?([^")]+)"?\)=\((.+?)\) already exists/.exec(message);
+        const target = Array.isArray((error as any)?.meta?.target)
+            ? (error as any).meta.target.join(", ")
+            : null;
+        const friendly = m
+            ? `Already exists: ${m[1]} "${m[2]}" is already in use — open the existing record to edit it, or use a different ${m[1]}.`
+            : target
+                ? `Already exists: a record with this ${target} is already saved — open the existing one instead of creating a duplicate.`
+                : "This record already exists — open the existing one instead of creating a duplicate.";
+        return NextResponse.json({ error: friendly }, { status: 409 });
+    }
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
 }
 
