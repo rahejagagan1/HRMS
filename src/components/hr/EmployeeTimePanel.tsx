@@ -1176,7 +1176,17 @@ export function EmployeeTimePanel({
                 return "Office";
               };
               const isSplitDay = !!(leaveHalfDir || wfhHalfDir || halfWfhFor("first") || halfWfhFor("second"));
-              const splitLabel = isSplitDay ? `1st Half ${halfKind("first")} · 2nd Half ${halfKind("second")}` : null;
+              // Both halves WFH (and no leave on either) isn't a split at all —
+              // the employee is remote the whole day, so it reads as a FULL day
+              // of WFH. The halves are still named so it's clear the day was
+              // booked as two separate requests.
+              const bothHalvesWfh = !halfLeaveFor("first") && !halfLeaveFor("second")
+                && !!halfWfhFor("first") && !!halfWfhFor("second");
+              const splitLabel = bothHalvesWfh
+                ? "Full Day WFH · 1st + 2nd Half"
+                : isSplitDay
+                  ? `1st Half ${halfKind("first")} · 2nd Half ${halfKind("second")}`
+                  : null;
               // An APPROVED PAID half-day leave pays the non-worked half, so a
               // `half_day` attendance row is a fully-paid day — payroll's
               // half-day excuse (generate route) skips the 0.5 LOP. Drives the

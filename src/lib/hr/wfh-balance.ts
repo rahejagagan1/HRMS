@@ -40,11 +40,20 @@ export function wfhDayKind(reasons: Array<string | null | undefined>): WfhDayKin
   return "first_half";
 }
 
-/** Chip text for a day's WFH kind. null = full day (no half chip needed). */
+/** Both halves booked = remote for the whole day, so it counts as a FULL-day
+ *  WFH everywhere a caller asks "is this person WFH all day?" — the halves are
+ *  kept only so the UI can still name them. */
+export function isFullDayWfh(kind: WfhDayKind | null | undefined): boolean {
+  return kind === "full" || kind === "both";
+}
+
+/** Chip text for a day's WFH kind. null = plain full day (no half chip). */
 export function wfhKindLabel(kind: WfhDayKind | null | undefined): string | null {
   if (kind === "first_half")  return "1st half";
   if (kind === "second_half") return "2nd half";
-  if (kind === "both")        return "1st + 2nd half";
+  // Full day, but both halves are still named so it's clear it was booked as
+  // two requests rather than one.
+  if (kind === "both")        return "full day (1st + 2nd half)";
   return null;
 }
 
@@ -52,7 +61,7 @@ export function wfhKindLabel(kind: WfhDayKind | null | undefined): string | null
 export function wfhKindTitle(kind: WfhDayKind | null | undefined): string {
   if (kind === "first_half")  return "Working from home (first half)";
   if (kind === "second_half") return "Working from home (second half)";
-  if (kind === "both")        return "Working from home (first half + second half)";
+  if (kind === "both")        return "Working from home all day (first half + second half)";
   return "Working from home";
 }
 
