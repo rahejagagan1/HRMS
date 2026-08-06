@@ -13,6 +13,7 @@ import { parseAttLoc } from "@/lib/attendance-location";
 import { isHRAdmin, canApplyRestrictedLeave, canViewAllBrands } from "@/lib/access";
 import { isMobileDevice as detectMobileDevice } from "@/lib/is-mobile-device";
 import { useClockActions } from "@/lib/hr/use-clock-actions";
+import { wfhKindLabel, wfhKindTitle } from "@/lib/hr/wfh-balance";
 import PulseGateModal from "@/components/hr/PulseGateModal";
 import ExitSurveyGateModal from "@/components/hr/ExitSurveyGateModal";
 import DesktopGateModal from "@/components/hr/DesktopGateModal";
@@ -3679,17 +3680,20 @@ export default function HRHomePage() {
                         <Av name={u.name} url={u.profilePictureUrl} size={36} />
                         {/* Home-icon badge — marks this avatar as a Work-From-Home user. */}
                         <span
-                          aria-label={u.wfhKind === "first_half" ? "Working from home (first half)" : u.wfhKind === "second_half" ? "Working from home (second half)" : "Working from home"}
-                          title={u.wfhKind === "first_half" ? "Working from home (first half)" : u.wfhKind === "second_half" ? "Working from home (second half)" : "Working from home"}
+                          aria-label={wfhKindTitle(u.wfhKind)}
+                          title={wfhKindTitle(u.wfhKind)}
                           className="absolute -top-0.5 -right-0.5 flex h-[14px] w-[14px] items-center justify-center rounded-full bg-[#008CFF] ring-2 ring-white shadow-sm"
                         >
                           <HomeIcon size={10} strokeWidth={2.5} color="#ffffff" />
                         </span>
                       </span>
                       <span className={`w-11 truncate text-center text-[9.5px] ${C.t3}`}>{u.name.split(" ")[0]}</span>
-                      {(u.wfhKind === "first_half" || u.wfhKind === "second_half") && (
-                        <span className="text-[8.5px] font-semibold leading-none text-[#008CFF]">
-                          {u.wfhKind === "first_half" ? "1st half" : "2nd half"}
+                      {/* Both halves booked → both are named ("1st + 2nd half"),
+                          never just one. Wider than the avatar, so let it size
+                          to its own text instead of the 44px name column. */}
+                      {wfhKindLabel(u.wfhKind) && (
+                        <span className="whitespace-nowrap text-[8.5px] font-semibold leading-none text-[#008CFF]">
+                          {wfhKindLabel(u.wfhKind)}
                         </span>
                       )}
                     </div>

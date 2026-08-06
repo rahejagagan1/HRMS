@@ -225,19 +225,45 @@ export async function POST(req: NextRequest) {
     if (targetDays.length === 0) {
       return NextResponse.json({ error: "Selected dates are all weekends." }, { status: 400 });
     }
+    // Dedupe guard. A day already carrying a WFH is NOT always a clash: a
+    // First-Half and a Second-Half WFH on the SAME date are complementary
+    // (someone who worked the morning from home and hits rain at lunch can
+    // add the afternoon). Mirrors the leave route's segment logic — the half
+    // is encoded as a "[First Half]" / "[Second Half]" marker in the reason,
+    // so we parse it and block only genuine clashes: full days, duplicate
+    // halves, and the generic [Half Day] marker (which names no specific
+    // half, so it can't be proven complementary).
+    const segOf = (txt: string | null | undefined): "full" | "first" | "second" => {
+      const m = /\[(First Half|Second Half)\]/i.exec(String(txt ?? ""));
+      if (!m) return "full";
+      return /first/i.test(m[1]) ? "first" : "second";
+    };
+    const COMPLEMENTS = new Set(["first|second", "second|first"]);
+    const newSeg = segOf(reason);
     const existing = await prisma.wFHRequest.findMany({
       where: {
         userId: subjectUserId,
         status: { in: ["pending", "partially_approved", "approved"] },
         date: { in: targetDays },
       },
-      select: { date: true },
+      select: { date: true, reason: true },
     });
-    const existingKeys = new Set(existing.map((r) => r.date.toISOString().slice(0, 10)));
-    const daysToCreate = targetDays.filter((d) => !existingKeys.has(d.toISOString().slice(0, 10)));
+    // A date is blocked only when at least one existing row on it conflicts
+    // with the segment being requested.
+    const blockedKeys = new Set(
+      existing
+        .filter((r) => !COMPLEMENTS.has(`${newSeg}|${segOf(r.reason)}`))
+        .map((r) => r.date.toISOString().slice(0, 10)),
+    );
+    const daysToCreate = targetDays.filter((d) => !blockedKeys.has(d.toISOString().slice(0, 10)));
     if (daysToCreate.length === 0) {
+      const halfClash = newSeg !== "full" && existing.some((r) => segOf(r.reason) === newSeg);
       return NextResponse.json(
-        { error: "All selected days already have a pending or approved WFH." },
+        {
+          error: halfClash
+            ? `You already have a ${newSeg === "first" ? "first-half" : "second-half"} WFH request for this day.`
+            : "All selected days already have a pending or approved WFH.",
+        },
         { status: 409 },
       );
     }
@@ -269,8 +295,8 @@ export async function POST(req: NextRequest) {
     const rangeLabel = isRange
       ? `${fmt(fromIst)} – ${fmt(toIst)}`
       : fmt(fromIst);
-    const skippedNote = existingKeys.size > 0
-      ? ` (skipped ${existingKeys.size} day(s) that already had WFH)`
+    const skippedNote = blockedKeys.size > 0
+      ? ` (skipped ${blockedKeys.size} day(s) that already had WFH)`
       : "";
 
     // Structured emailData so the WFH email mirrors leave / on-duty —
@@ -342,7 +368,7 @@ export async function POST(req: NextRequest) {
     // Backwards-compat shape for the single-day path; range returns a list.
     return NextResponse.json(
       isRange
-        ? { created, skipped: Array.from(existingKeys) }
+        ? { created, skipped: Array.from(blockedKeys) }
         : created[0],
       { status: 201 },
     );

@@ -17,6 +17,45 @@ export function wfhDayWeight(reason: string | null | undefined): number {
   return WFH_HALF_DAY_RE.test(reason ?? "") ? 0.5 : 1;
 }
 
+/** Which half ONE WFH request covers, read from its reason marker.
+ *  The bare legacy "[Half Day]" names no specific half → treated as first. */
+export type WfhSegment = "full" | "first_half" | "second_half";
+export function wfhSegment(reason: string | null | undefined): WfhSegment {
+  const m = /\[(First Half|Second Half|Half Day)\]/i.exec(String(reason ?? ""));
+  if (!m) return "full";
+  return /second/i.test(m[1]) ? "second_half" : "first_half";
+}
+
+/** Collapse ALL of a user's WFH rows for ONE day into what the UI shows.
+ *  An employee who booked the morning AND the afternoon separately is remote
+ *  the whole day, and BOTH halves must be named — "both" renders as
+ *  "1st + 2nd half", never just the newest row's half (which silently hid
+ *  the other one). */
+export type WfhDayKind = WfhSegment | "both";
+export function wfhDayKind(reasons: Array<string | null | undefined>): WfhDayKind {
+  const segs = new Set(reasons.map(wfhSegment));
+  if (segs.has("full")) return "full";
+  if (segs.has("first_half") && segs.has("second_half")) return "both";
+  if (segs.has("second_half")) return "second_half";
+  return "first_half";
+}
+
+/** Chip text for a day's WFH kind. null = full day (no half chip needed). */
+export function wfhKindLabel(kind: WfhDayKind | null | undefined): string | null {
+  if (kind === "first_half")  return "1st half";
+  if (kind === "second_half") return "2nd half";
+  if (kind === "both")        return "1st + 2nd half";
+  return null;
+}
+
+/** Long form for tooltips / aria-labels. */
+export function wfhKindTitle(kind: WfhDayKind | null | undefined): string {
+  if (kind === "first_half")  return "Working from home (first half)";
+  if (kind === "second_half") return "Working from home (second half)";
+  if (kind === "both")        return "Working from home (first half + second half)";
+  return "Working from home";
+}
+
 /** Live, half-day-weighted WFH usage for ONE user in the month of `now`.
  *  Counts the in-flight set (pending + partially_approved + approved) —
  *  the same rows the apply cap counts — so "used" shown anywhere always

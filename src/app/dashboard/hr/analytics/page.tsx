@@ -7,6 +7,7 @@ import Link from "next/link";
 import { parseAttLoc, captureClockInGeo } from "@/lib/attendance-location";
 import { isHRAdmin } from "@/lib/access";
 import { desktopBypassHeader } from "@/lib/desktop-bypass";
+import { wfhKindLabel, wfhKindTitle } from "@/lib/hr/wfh-balance";
 import {
   ChevronLeft, ChevronRight, ChevronDown,
   Send, BarChart2, Award, Mail, Users, Calendar,
@@ -528,15 +529,29 @@ export default function HRHomePage() {
 
             {/* ── Working Remotely ── */}
             <div className={`${C.card} p-3`}>
-              <p className={`text-[13px] font-semibold ${C.t1} mb-3`}>Working Remotely</p>
+              <p className={`text-[13px] font-semibold ${C.t1} mb-3`}>
+                Working Remotely
+                {remote.length > 0 && (
+                  <span className={`ml-1.5 text-[11px] font-normal ${C.t3}`}>({remote.length})</span>
+                )}
+              </p>
               {remote.length > 0 ? (
+                // Every WFH applicant, wrapping into rows — a slice() here used
+                // to hide everyone past the sixth with no "+N more" hint. Half
+                // days name BOTH halves when the morning and afternoon were
+                // booked separately.
                 <div className="flex flex-wrap gap-3">
-                  {remote.slice(0, 6).map((u: any) => (
+                  {remote.map((u: any) => (
                     <div key={u.id} className="flex flex-col items-center gap-1">
                       <Av name={u.name} url={u.profilePictureUrl} size={40}/>
                       <span className={`text-[10px] ${C.t3} truncate text-center`} style={{ width: 40 }}>
                         {u.name.split(" ")[0]}
                       </span>
+                      {wfhKindLabel(u.wfhKind) && (
+                        <span className="whitespace-nowrap text-[8.5px] font-semibold leading-none text-[#008CFF]" title={wfhKindTitle(u.wfhKind)}>
+                          {wfhKindLabel(u.wfhKind)}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

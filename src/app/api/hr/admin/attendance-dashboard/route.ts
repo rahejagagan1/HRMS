@@ -7,6 +7,7 @@ import { serializeBigInt } from "@/lib/utils";
 import { getPoliciesByUser } from "@/lib/hr/notification-policy";
 import { evaluateOfficeGeofence } from "@/lib/office-geofence";
 import { getBrandScope } from "@/lib/hr/brand-scope";
+import { wfhDayKind } from "@/lib/hr/wfh-balance";
 
 export const dynamic = "force-dynamic";
 
@@ -120,6 +121,17 @@ export async function GET() {
       select: { userId: true, reason: true },
     });
     const wfhTodayIds = new Set<number>(wfhTodayRows.map((r) => r.userId));
+
+    // Half-day kind per user, folding ALL of their rows for the day together
+    // so a morning + afternoon pair reports BOTH halves. This endpoint used to
+    // return only the wfhToday boolean, so the dashboard's "1st half"/"2nd half"
+    // chip had nothing to render from and never appeared.
+    const wfhReasonsByUser = new Map<number, Array<string | null>>();
+    for (const r of wfhTodayRows) {
+      const arr = wfhReasonsByUser.get(r.userId) ?? [];
+      arr.push(r.reason);
+      wfhReasonsByUser.set(r.userId, arr);
+    }
 
     // First-half OFF (a [First Half] leave or WFH covers today) → the employee
     // is only expected from the afternoon, so late detection uses the shift
@@ -239,6 +251,7 @@ export async function GET() {
         distanceFromOfficeM:  effDistance,
         status, // derived: on_leave | wfh | hybrid | remote | office | absent
         wfhToday: isWfhToday,
+        wfhKind:  isWfhToday ? wfhDayKind(wfhReasonsByUser.get(u.id) ?? []) : null,
       };
     });
 
