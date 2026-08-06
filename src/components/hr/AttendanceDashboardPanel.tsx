@@ -8,7 +8,7 @@ import { fetcher } from "@/lib/swr";
 import { Users, CalendarOff, CheckCircle2, Home, Search, CircleUser, Clock, ChevronLeft, ChevronRight, ChevronDown, MapPin, Monitor } from "lucide-react";
 import FilterDropdown, { FilterOption } from "@/components/hr/FilterDropdown";
 import { useUrlTab } from "@/lib/hooks/useUrlTab";
-import { wfhKindLabel, wfhKindTitle, type WfhDayKind } from "@/lib/hr/wfh-balance";
+import { wfhKindLabel, wfhKindTitle, type WfhDayKind } from "@/lib/hr/wfh-day-kind";
 
 type Row = {
   id: number; name: string; email: string; role: string; orgLevel: string;

@@ -13,7 +13,7 @@ import { parseAttLoc } from "@/lib/attendance-location";
 import { isHRAdmin, canApplyRestrictedLeave, canViewAllBrands } from "@/lib/access";
 import { isMobileDevice as detectMobileDevice } from "@/lib/is-mobile-device";
 import { useClockActions } from "@/lib/hr/use-clock-actions";
-import { wfhKindLabel, wfhKindTitle } from "@/lib/hr/wfh-balance";
+import { wfhKindLabel, wfhKindTitle } from "@/lib/hr/wfh-day-kind";
 import PulseGateModal from "@/components/hr/PulseGateModal";
 import ExitSurveyGateModal from "@/components/hr/ExitSurveyGateModal";
 import DesktopGateModal from "@/components/hr/DesktopGateModal";
