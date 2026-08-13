@@ -84,6 +84,19 @@ export async function emailPayslipsForRun(
   });
   const profMap = new Map(profiles.map((p) => [p.userId, p]));
 
+  // RBAC designation labels — the payslip's "Designation" cell prints
+  // Designation.label ONLY, same policy as the letter templates
+  // (2026-08-06). The profile's free-text job title is not a fallback.
+  const desigRows = uids.length
+    ? await prisma.$queryRawUnsafe<Array<{ id: number; label: string | null }>>(
+        `SELECT u.id, d.label
+           FROM "User" u LEFT JOIN "Designation" d ON d.id = u."designationId"
+          WHERE u.id = ANY($1::int[])`,
+        uids,
+      )
+    : [];
+  const desigByUser = new Map(desigRows.map((r) => [r.id, r.label]));
+
   // When a brand is given, only email that brand's employees — a PayrollRun
   // is shared by both brands, so marking NB Media paid must not mail YT Labs.
   // brandOf: YT Labs is exact; everything else (incl. null/legacy) is NB Media.
@@ -137,8 +150,9 @@ export async function emailPayslipsForRun(
             bankAccountNumber: safeDecrypt(prof.bankAccountNumber),
             bankIfsc: safeDecrypt(prof.bankIfsc),
             panNumber: safeDecrypt(prof.panNumber),
+            designation: desigByUser.get(ps.userId) ?? null,
           }
-        : {};
+        : { designation: desigByUser.get(ps.userId) ?? null };
       const pObj = { ...ps, adhocPayments: adhocMap.get(ps.userId) ?? [] };
       const effStructure = pickStructureForMonth(
         ps.salaryStructure as any,
