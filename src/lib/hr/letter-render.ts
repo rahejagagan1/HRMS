@@ -195,7 +195,9 @@ export async function buildPlaceholderResolver(ctx: RenderContext): Promise<{
 }> {
   const user = await prisma.user.findUnique({
     where: { id: ctx.employeeId },
-    include: { employeeProfile: true },
+    // designation = the RBAC row (Admin → Designations) — the ONLY source
+    // for {{EmployeeJobInfo.JobTitle}} on letters (agreed 2026-08-06).
+    include: { employeeProfile: true, designation: { select: { label: true } } },
   });
   if (!user) throw new Error(`Employee #${ctx.employeeId} not found.`);
 
@@ -295,7 +297,11 @@ function resolvePlaceholder(
       if (field === "ShortDate")      return fmtShortDate(letterDate);
       break;
     case "EmployeeJobInfo":
-      if (field === "JobTitle")        return p?.designation || u?.role || "";
+      // RBAC designation ONLY (2026-08-06, Gagan) — same source as the
+      // header search, so letters can never drift from the designation
+      // system. The profile's free-text job title is deliberately not a
+      // fallback; blank prints blank so HR notices and fixes the RBAC row.
+      if (field === "JobTitle")        return u?.designation?.label || "";
       if (field === "Department")      return p?.department || "";
       if (field === "DateJoined")      return fmtDate(p?.joiningDate);
       if (field === "ResignationDate") return fmtDate(ex?.resignationDate);
@@ -644,7 +650,9 @@ export async function renderLetterHtml(
   let exit: any = null;
   if (ctx.manual) {
     const m = ctx.manual;
-    user = { name: m.name || "", email: m.email || "", role: m.designation || "" };
+    // A new joiner isn't in the DB, so there is no RBAC row — the typed-in
+    // designation plays that part via a virtual designation.label.
+    user = { name: m.name || "", email: m.email || "", role: m.designation || "", designation: { label: m.designation || "" } };
     profile = {
       employeeId:        m.employeeNumber || "",
       designation:       m.designation || "",
@@ -658,7 +666,8 @@ export async function renderLetterHtml(
   } else {
     user = await prisma.user.findUnique({
       where: { id: ctx.employeeId! },
-      include: { employeeProfile: true },
+      // designation = RBAC row — sole source for {{EmployeeJobInfo.JobTitle}}.
+      include: { employeeProfile: true, designation: { select: { label: true } } },
     });
     if (!user) throw new Error(`Employee #${ctx.employeeId} not found.`);
 
