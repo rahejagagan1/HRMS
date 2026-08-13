@@ -229,7 +229,11 @@ function HeaderSearchInner() {
                   {people.map((u: any) => {
                     const initials = (u.name || "?").split(" ").map((p: string) => p[0]).join("").slice(0, 2).toUpperCase();
                     const dept = u.employeeProfile?.department;
-                    const desg = u.employeeProfile?.designation;
+                    // RBAC designation ONLY (Admin → Designations — the one
+                    // permissions run on, so search can't drift from it). The
+                    // profile's free-text job title is deliberately not a
+                    // fallback; no RBAC row → the email line shows instead.
+                    const desg = u.designation?.label;
                     // Exit-lifecycle badge — "On Notice" (amber)
                     // while serving notice; "Exited" (slate) once
                     // HR finalises or the LWD has passed. Gated to
