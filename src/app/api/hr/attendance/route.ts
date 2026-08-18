@@ -4,6 +4,7 @@ import { requireAuth, isHRAdmin, serverError } from "@/lib/api-auth";
 import { canViewDoorEntryLog } from "@/lib/access";
 import { istTodayDateOnly } from "@/lib/ist-date";
 import { dayBars } from "@/lib/hr/day-rules";
+import { shortLeaveDayState, resolveShortLeaveDayStatus, isShortLeaveReason } from "@/lib/hr/short-leave";
 
 // GET /api/hr/attendance?userId=X&month=2026-04
 export async function GET(req: NextRequest) {
@@ -68,6 +69,31 @@ export async function GET(req: NextRequest) {
       orderBy: { date: "asc" },
     });
 
+    // Short-leave applications overlapping the page. A short leave excuses
+    // 2h per slot, so the day's required bar drops by that much — without
+    // this, re-derivation below judged a completed reduced day (e.g. 7h of a
+    // 9h shift with an approved 2h short leave) against the FULL bar and
+    // displayed "Half Day" for a day that carries no penalty at all.
+    const slRows = await prisma.leaveApplication.findMany({
+      where: { userId: targetUserId, fromDate: { lte: toDate }, toDate: { gte: fromDate } },
+      select: { fromDate: true, toDate: true, reason: true, status: true },
+    });
+    const ymdKey = (d: Date) => new Date(d).toISOString().slice(0, 10);
+    const slByDate = new Map<string, Array<{ reason: string | null; status: string }>>();
+    for (const l of slRows) {
+      if (!isShortLeaveReason(l.reason)) continue;
+      // Short leave is always a single date, but walk the range defensively.
+      const cur = new Date(Date.UTC(l.fromDate.getUTCFullYear(), l.fromDate.getUTCMonth(), l.fromDate.getUTCDate()));
+      const stop = new Date(Date.UTC(l.toDate.getUTCFullYear(), l.toDate.getUTCMonth(), l.toDate.getUTCDate()));
+      while (cur.getTime() <= stop.getTime()) {
+        const k = ymdKey(cur);
+        const arr = slByDate.get(k) ?? [];
+        arr.push({ reason: l.reason, status: l.status });
+        slByDate.set(k, arr);
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+    }
+
     // Attach the sessions[] array to each record so the UI can render
     // multi-session days. One round-trip — fetch all sessions for the
     // page's records in a single query, then bucket by attendanceId.
@@ -119,6 +145,21 @@ export async function GET(req: NextRequest) {
       // shared day-rules) — NOT a hardcoded 9h/4.5h. This is what a short
       // Saturday needs: a completed 6h Saturday reads as present, not half-day.
       const { full, half } = dayBars(recDate, dayShift);
+      // Short-leave days go through the SAME shared resolver clock-out and
+      // auto-LOP use, so a page can never disagree with the payslip: a live
+      // short leave lowers the bar by 2h/slot (completed → full day), and a
+      // rejected one prices the [bar−2h, bar) band at ¼ day.
+      const slDay = slByDate.get(ymdKey(recDate));
+      if (slDay?.length) {
+        const st = shortLeaveDayState(slDay);
+        return {
+          totalMinutes,
+          status: resolveShortLeaveDayStatus({
+            worked: totalMinutes, fullBar: full, halfBar: half,
+            activeMin: st.activeMin, rejectedMin: st.rejectedMin, prevStatus: existingStatus,
+          }),
+        };
+      }
       let status = existingStatus;
       if      (totalMinutes >= full) status = existingStatus === "late" ? "late" : "present";
       else if (totalMinutes >= half) status = "half_day";
