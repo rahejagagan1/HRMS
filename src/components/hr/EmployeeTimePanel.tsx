@@ -10,6 +10,7 @@ import {
 import { fetcher } from "@/lib/swr";
 import { parseAttLoc, type AttLoc } from "@/lib/attendance-location";
 import { isWorkingDay } from "@/lib/hr/shift-working-days";
+import { SHORT_LEAVE_MINUTES } from "@/lib/hr/short-leave";
 import HandoffSection from "@/components/hr/HandoffSection";
 import SelectField from "@/components/ui/SelectField";
 import { DateField } from "@/components/ui/date-field";
@@ -1132,6 +1133,12 @@ export function EmployeeTimePanel({
                 .map((l: any) => (SL_RE.exec(l.reason ?? "")?.[1] ?? "").toLowerCase())
                 .filter(Boolean)
                 .map((s: string) => s === "evening" ? "Evening" : "Morning");
+              // Minutes excused by LIVE morning short leaves (dayShortLeaves
+              // already drops rejected / cancelled). Feeds the late cutoff
+              // below — same rule as the server's lateCutoffMinFor().
+              const morningShortLeaveMin = dayShortLeaves.filter((l: any) =>
+                (SL_RE.exec(l.reason ?? "")?.[1] ?? "").toLowerCase() !== "evening",
+              ).length * SHORT_LEAVE_MINUTES;
               // A FULL-day leave renders as the centered "On <X> Leave" banner and
               // hides the timeline. A HALF-day leave does NOT — the employee works
               // the other half, so keep the timeline and show BOTH segments.
@@ -1264,6 +1271,14 @@ export function EmployeeTimePanel({
                 if (firstHalfOff && shiftEndTime) {
                   const [eh, em] = String(shiftEndTime).split(":").map((n: string) => Number(n) || 0);
                   cutoffMin = Math.round((startMin + eh * 60 + em) / 2) + grace;
+                } else if (morningShortLeaveMin > 0) {
+                  // A MORNING short leave excuses the first 2h, so the cutoff
+                  // moves by that much (+ the shift's grace) — exactly what
+                  // lateCutoffMinFor() does server-side at clock-in. Without
+                  // it, someone who legitimately arrived at 11:31 on a 10:00
+                  // shift was badged "Late" for a day the server never
+                  // stamped late. Evening short leave doesn't shift arrival.
+                  cutoffMin = startMin + morningShortLeaveMin + grace;
                 }
                 return istMin > cutoffMin;
               })();

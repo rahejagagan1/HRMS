@@ -84,6 +84,8 @@ type Employee = {
   profilePictureUrl?: string | null;
   isActive?: boolean;
   employeeProfile?: { designation?: string | null; department?: string | null } | null;
+  /** RBAC designation (Admin → Designations) — what letters print. */
+  designation?: { label?: string | null } | null;
 };
 
 // Next.js 16 + Turbopack requires every useSearchParams() consumer
@@ -180,16 +182,22 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
   const [savingDesignation, setSavingDesignation]     = useState(false);
   const [designationSaved, setDesignationSaved]       = useState(false);
 
-  // Live designation list — same source as Edit Profile so HR sees the
-  // full set (CEO, COO, Manager, Lead, every brand-scoped role) instead
-  // of the stale 28-entry hardcoded list this page used previously.
-  const { data: desigData } = useSWR<{ designations: { label: string }[] }>(
+  // Live designation list — the RBAC catalog (Admin → Designations). The
+  // letter's {{EmployeeJobInfo.JobTitle}} prints Designation.label ONLY
+  // (2026-08-06), so this editor reads and writes the RBAC designation —
+  // not the profile's free-text job title.
+  const { data: desigData } = useSWR<{ designations: { id: number; label: string }[] }>(
     "/api/designations",
     fetcher,
   );
   const designationOptions: string[] = useMemo(() => {
     const labels = (desigData?.designations ?? []).map((d) => d.label).filter(Boolean);
     return Array.from(new Set(labels)).sort((a, b) => a.localeCompare(b));
+  }, [desigData]);
+  const designationIdByLabel = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const d of desigData?.designations ?? []) if (d.label) m.set(d.label, d.id);
+    return m;
   }, [desigData]);
 
   // Auto-fill custom fields from the picked employee's profile +
@@ -399,9 +407,10 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
     return () => { cancelled = true; };
   }, [employee?.id]);
 
-  // Keep the editable designation in sync with whoever is picked.
+  // Keep the editable designation in sync with whoever is picked — the
+  // RBAC label, since that's what the letter prints.
   useEffect(() => {
-    setDesignationDraft(employee?.employeeProfile?.designation ?? "");
+    setDesignationDraft(employee?.designation?.label ?? "");
     setDesignationSaved(false);
   }, [employee?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -460,23 +469,35 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
     }
   };
 
-  // Persist a designation edit to the picked employee's profile, then
-  // mirror it locally so the preview / generated letter pick it up.
+  // Persist a designation edit as the RBAC designation (User.designationId)
+  // — the letter prints Designation.label, so saving the free-text profile
+  // field here would no longer change the document. The people PUT also
+  // syncs the profile job title from the label, keeping every list aligned.
   const saveDesignation = async () => {
     if (!employee?.id) return;
     const next = designationDraft.trim();
+    const nextId = designationIdByLabel.get(next);
+    if (!nextId) {
+      alert("Pick a designation from the list — letters print the RBAC designation, so a free-text title can't be saved here.");
+      return;
+    }
     setSavingDesignation(true);
     try {
       const res = await fetch(`/api/hr/people/${employee.id}`, {
         method:  "PUT",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ designation: next }),
+        body:    JSON.stringify({ designationId: nextId }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j?.error || "Couldn't update designation");
       }
-      setEmployee((e) => e ? { ...e, employeeProfile: { ...(e.employeeProfile ?? {}), designation: next } } : e);
+      setEmployee((e) => e ? {
+        ...e,
+        designation: { label: next },
+        // Server mirrors the label onto the profile job title too.
+        employeeProfile: { ...(e.employeeProfile ?? {}), designation: next },
+      } : e);
       setPreview(null);
       setDesignationSaved(true);
       // Auto-re-render the letter so HR sees the new title applied
@@ -643,7 +664,7 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
                       <button
                         type="button"
                         onClick={saveDesignation}
-                        disabled={savingDesignation || designationDraft.trim() === (employee.employeeProfile?.designation ?? "").trim()}
+                        disabled={savingDesignation || designationDraft.trim() === (employee.designation?.label ?? "").trim()}
                         className="h-9 px-4 rounded-lg bg-[#008CFF] text-white text-[12px] font-semibold transition-colors hover:bg-[#0070cc] disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {savingDesignation ? "Saving…" : "Save"}
@@ -651,8 +672,8 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
                     </div>
                     <p className="mt-1 text-[11px] text-slate-400">
                       {designationSaved
-                        ? <span className="font-medium text-emerald-600">Saved — updated on the profile and this letter.</span>
-                        : "Changes the employee's designation directly — no need to open Edit Profile."}
+                        ? <span className="font-medium text-emerald-600">Saved — RBAC designation updated; the letter prints it.</span>
+                        : "Changes the RBAC designation (Admin → Designations) — this is what the letter prints."}
                     </p>
                   </div>
                 )}
@@ -1045,7 +1066,7 @@ function EmployeePicker({
           )}
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-medium text-slate-800 truncate">{value.name}</p>
-            <p className="text-[11px] text-slate-500 truncate">{value.employeeProfile?.designation || value.email}</p>
+            <p className="text-[11px] text-slate-500 truncate">{value.designation?.label || value.email}</p>
           </div>
           {value.isActive === false && (
             <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-500 ring-1 ring-inset ring-slate-300">Exited</span>
@@ -1089,7 +1110,7 @@ function EmployeePicker({
               )}
               <div className="min-w-0 flex-1">
                 <p className="text-[12.5px] font-medium text-slate-800 truncate">{u.name}</p>
-                <p className="text-[11px] text-slate-500 truncate">{u.employeeProfile?.designation || u.email}</p>
+                <p className="text-[11px] text-slate-500 truncate">{u.designation?.label || u.email}</p>
               </div>
               {u.isActive === false && (
                 <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-500 ring-1 ring-inset ring-slate-300">Exited</span>
