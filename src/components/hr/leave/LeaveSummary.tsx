@@ -470,7 +470,16 @@ export default function LeaveSummary({
                       <span className={`text-[11px] px-2 py-0.5 rounded-full ${statusPill(a.status)}`}>{prettyStatus(a.status)}</span>
                       {approverName && <div className="text-[11px] text-slate-400 mt-1">by {approverName}</div>}
                     </td>
-                    <td className="px-4 py-3 text-[13px] text-slate-700 whitespace-nowrap">{a.user?.name ?? "—"}</td>
+                    <td className="px-4 py-3 text-[13px] text-slate-700 whitespace-nowrap">
+                      {a.user?.name ?? "—"}
+                      {/* On-behalf filings name the ACTUAL filer (usually HR).
+                          appliedBy is null on legacy rows and on self-applied
+                          leaves the sub-line is redundant — show it only when
+                          someone else pressed Apply. */}
+                      {a.appliedBy?.name && a.appliedBy.id !== a.userId && (
+                        <div className="text-[11px] text-slate-400">filed by {a.appliedBy.name}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-[13px] text-slate-600 whitespace-nowrap">{decidedOn ? fmtDate(decidedOn, true) : "—"}</td>
                     <td className="px-4 py-3 text-[12.5px] text-slate-500 max-w-[220px]"><span className="line-clamp-2">{cleanNote(a.reason) || "—"}</span></td>
                     <td className="px-4 py-3 text-[12.5px] text-slate-500 max-w-[180px]"><span className="line-clamp-2">{rejectReason}</span></td>
@@ -537,7 +546,16 @@ export default function LeaveSummary({
                                       <ChevronRight size={14} className="text-slate-400" />
                                     </button>
                                     {typeListOpen && (
-                                      <div className="absolute left-full top-0 ml-1.5 w-56 max-h-72 overflow-y-auto rounded-xl border border-slate-200/80 bg-white p-1.5 shadow-2xl ring-1 ring-black/[0.03]">
+                                      <div
+                                        className={`absolute top-0 w-56 max-h-72 overflow-y-auto rounded-xl border border-slate-200/80 bg-white p-1.5 shadow-2xl ring-1 ring-black/[0.03] ${
+                                          /* The kebab column hugs the viewport's right edge, so a
+                                             right-opening submenu clips off-screen — open toward
+                                             whichever side actually has the ~230px it needs. */
+                                          typeof window !== "undefined" && menuRect.right + 236 <= window.innerWidth
+                                            ? "left-full ml-1.5"
+                                            : "right-full mr-1.5"
+                                        }`}
+                                      >
                                         {leaveTypes.length === 0 ? (
                                           <p className="px-2.5 py-2 text-[11.5px] text-slate-400">No leave types.</p>
                                         ) : leaveTypes.map((t) => {
