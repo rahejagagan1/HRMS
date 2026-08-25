@@ -13,6 +13,7 @@ import {
   SHORT_LEAVE_MINUTES, shortLeaveDayState, resolveShortLeaveDayStatus,
 } from "@/lib/hr/short-leave";
 import { dayBars, lateCutoffMinFor } from "@/lib/hr/day-rules";
+import { checkNoticePeriod } from "@/lib/hr/leave-date-rules";
 import { istMonthRange } from "@/lib/ist-date";
 
 // After approving a HALF-day leave: if the OTHER half of the same date is
@@ -206,6 +207,25 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
       const newType = await prisma.leaveType.findUnique({ where: { id: newTypeId } });
       if (!newType || !newType.isActive) return NextResponse.json({ error: "Unknown leave type" }, { status: 400 });
+
+      // Advance-notice gate (2026-08-25) — an edit must not become a bypass:
+      // filing Sick Leave today and editing it into a next-day Casual Leave
+      // would dodge the 2-day CL notice rule on the apply route. Enforced
+      // only when the START DATE or TYPE actually changes, so fixing the
+      // reason/POC on a CL that was filed in time stays allowed even once
+      // its start date is near. Same exemptions as apply (short leave,
+      // back-dating tier).
+      {
+        const startChanged = newFrom.toISOString().slice(0, 10) !== new Date(application.fromDate).toISOString().slice(0, 10);
+        const typeChanged  = newTypeId !== application.leaveTypeId;
+        if (startChanged || typeChanged) {
+          const noticeErr = checkNoticePeriod(newFrom, self, newType.code, {
+            shortLeave: isShortLeaveReason(newReason),
+            typeName: newType.name,
+          });
+          if (noticeErr) return NextResponse.json({ error: noticeErr }, { status: 400 });
+        }
+      }
 
       const subjectShift = await prisma.userShift.findUnique({
         where: { userId: application.userId },

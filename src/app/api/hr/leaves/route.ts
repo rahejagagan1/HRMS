@@ -5,7 +5,7 @@ import { getBrandScope } from "@/lib/hr/brand-scope";
 import { canApplyRestrictedLeave } from "@/lib/access";
 import { notifyUsers, brandCeoIdForEmployee, brandScopedFinalApprovers } from "@/lib/notifications";
 import { countWorkingDays } from "@/lib/hr/working-days";
-import { checkPastDateAllowed } from "@/lib/hr/leave-date-rules";
+import { checkPastDateAllowed, checkNoticePeriod } from "@/lib/hr/leave-date-rules";
 import { sendEmail } from "@/lib/email/sender";
 import { pocAssignmentEmail } from "@/lib/email/templates";
 import {
@@ -178,6 +178,16 @@ export async function POST(req: NextRequest) {
         { status: 403 },
       );
     }
+    // Advance-notice gate (2026-08-25): Casual Leave must be applied at
+    // least 2 days before its start date (see NOTICE_DAYS_BY_TYPE). Short
+    // leaves are exempt (same-day 2h by design); the back-dating tier
+    // (HR dept / CEO / developer) is exempt so urgent on-behalf filings
+    // still go through.
+    const noticeErr = checkNoticePeriod(fromDate, self, leaveType.code, {
+      shortLeave: wantShortLeave,
+      typeName: leaveType.name,
+    });
+    if (noticeErr) return NextResponse.json({ error: noticeErr }, { status: 400 });
     // ── Short Leave (2026-07-24) ────────────────────────────────────────
     // A 2-hour leave costing 0.25 CL, tagged in the reason as
     // "[Short Leave - Morning/Evening]". When detected we FORCE the type to
@@ -451,6 +461,13 @@ export async function POST(req: NextRequest) {
       return app;
     });
 
+    // ── Post-commit, best-effort from here (2026-08-25) ────────────────
+    // The leave row + pending-balance debit are COMMITTED above. Anything
+    // below is notifications/emails — a failure here used to bubble to the
+    // catch and 500 the request, so the client's apply popup stayed open
+    // showing a failure while the leave was actually filed (reported on
+    // the HR on-behalf flow). Log and still return the created leave.
+    try {
     // Initial notification recipients: the applicant's direct manager (L1
     // approver), every CEO / HR manager (L2 final approvers), and anyone
     // the applicant tagged in the "Notify" picker. HR/CEO are included
@@ -537,6 +554,9 @@ export async function POST(req: NextRequest) {
           reason:         reason || undefined,
         }),
       });
+    }
+    } catch (notifyErr) {
+      console.error("[POST /api/hr/leaves] post-create notifications failed (leave saved):", notifyErr);
     }
 
     return NextResponse.json(application);
