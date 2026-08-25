@@ -764,11 +764,11 @@ export default function AttendancePage() {
   // hand-crafted POST still 403s.
   const me = session?.user as any;
   const canApplyRestricted = canApplyRestrictedLeave(me);
-  const leaveTypes: { id: number; name: string }[] = Array.isArray(leaveTypesData)
+  const leaveTypes: { id: number; name: string; code?: string }[] = Array.isArray(leaveTypesData)
     ? leaveTypesData
         .filter((t: any) => t.applicable !== false)
         .filter((t: any) => t.adminOnly !== true || canApplyRestricted)
-        .map((t: any) => ({ id: t.id, name: t.name }))
+        .map((t: any) => ({ id: t.id, name: t.name, code: t.code }))
     : [];
 
   // Clock-in / clock-out actions are owned by a shared hook so the

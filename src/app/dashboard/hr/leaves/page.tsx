@@ -45,7 +45,7 @@ export default function LeavesPage() {
   const applyable = (Array.isArray(leaveTypes) ? leaveTypes : [])
     .filter((lt: any) => lt.applicable !== false)
     .filter((lt: any) => lt.adminOnly !== true || canApplyRestrictedLeave(me))
-    .map((lt: any) => ({ id: lt.id, name: lt.name }));
+    .map((lt: any) => ({ id: lt.id, name: lt.name, code: lt.code }));
 
   const refreshLeaves = () => mutate((k: string) => typeof k === "string" && k.includes("/api/hr/leaves"));
 

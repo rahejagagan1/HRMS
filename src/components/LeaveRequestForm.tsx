@@ -9,7 +9,7 @@ import { createPortal } from "react-dom";
 import { DatePicker } from "@/components/ui/date-picker";
 import EmployeePicker, { type PickerUser } from "@/components/hr/EmployeePicker";
 import HandoffSection from "@/components/hr/HandoffSection";
-import { leaveMinDate } from "@/lib/hr/leave-date-rules";
+import { leaveMinDate, leaveMinDateForType } from "@/lib/hr/leave-date-rules";
 import { isWorkingDay, type ShiftWorkRule } from "@/lib/hr/shift-working-days";
 import { buildShortLeaveReason, isShortLeaveReason, shortLeaveSlot, type ShortLeaveSlot } from "@/lib/hr/short-leave";
 
@@ -35,7 +35,7 @@ export type LeaveRequestFormProps = {
   title: string;
   policyText?: string;
   /** For "leave": list of LeaveType rows {id,name}. Shown as a select. */
-  leaveTypes?: { id: number; name: string }[];
+  leaveTypes?: { id: number; name: string; code?: string }[];
   /** Prefill the date field (YYYY-MM-DD). */
   prefillDate?: string;
   /** Edit mode (leave only): the LeaveApplication id being edited. When set,
@@ -55,7 +55,7 @@ function LeaveTypePicker({
   value,
   onChange,
 }: {
-  leaveTypes: { id: number; name: string }[];
+  leaveTypes: { id: number; name: string; code?: string }[];
   value: number | "";
   onChange: (v: number | "") => void;
 }) {
@@ -188,10 +188,6 @@ export default function LeaveRequestForm({
   const { data: myShift } = useSWR<{ shift: ShiftWorkRule; effectiveFrom: string | null }>(
     "/api/hr/me/shift", fetcher,
   );
-  // Restricted-admin tier (CEO / hr_manager / dev) can back-date; everyone
-  // else gets clamped to today + future via the date picker's minDate prop.
-  const minDate = leaveMinDate(me);
-
   const [fromDate, setFromDate] = useState(initial?.fromDate ?? today);
   const [toDate,   setToDate]   = useState(initial?.toDate ?? today);
   // Start with no leave type chosen — the picker shows the "Select Leave"
@@ -220,6 +216,28 @@ export default function LeaveRequestForm({
   const [shortSlot, setShortSlot] = useState<ShortLeaveSlot>(isEdit ? initShape.slot : "morning");
   const isHalfLeave  = kind === "leave" && (dayKind === "first_half" || dayKind === "second_half");
   const isShortLeave = kind === "leave" && dayKind === "short";
+
+  // Restricted-admin tier (CEO / hr_manager / dev) can back-date; everyone
+  // else gets clamped via the date picker's minDate prop. Type-aware
+  // (2026-08-25): Casual Leave needs 2 days' notice, so picking CL pushes
+  // the earliest selectable date forward — the server enforces the same rule
+  // via checkNoticePeriod, this just makes it visible while picking.
+  const selectedLeaveType = leaveTypes?.find((t) => t.id === leaveTypeId) ?? null;
+  const minDate = kind === "leave"
+    ? leaveMinDateForType(me, selectedLeaveType?.code, { shortLeave: isShortLeave })
+    : leaveMinDate(me);
+  // Keep the picked dates valid when the minimum moves — e.g. selecting
+  // Casual Leave pushes the earliest date +2 days, so a previously-picked
+  // "today" would silently fail on submit. Apply-mode only: edit mode must
+  // never rewrite the filed dates behind the user's back.
+  useEffect(() => {
+    if (isEdit || !minDate) return;
+    if (fromDate && fromDate < minDate) {
+      setFromDate(minDate);
+      if (!toDate || toDate < minDate) setToDate(minDate);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minDate, isEdit]);
 
   // Handoff fields — apply to every kind EXCEPT regularize, and are skipped
   // in Edit mode (the edit only touches dates / type / reason; the original
@@ -282,8 +300,10 @@ export default function LeaveRequestForm({
       if (!res.ok) { setErr((data as any).error || "Failed to update"); setSaving(false); return; }
       globalMutate((k: any) => typeof k === "string" && k.startsWith("/api/hr/leaves"));
       showToast("Leave updated", "success");
-      onSaved?.();
+      // Close FIRST — if the parent's onSaved refresh throws, the modal
+      // must not be stranded open after a successful save.
       onClose();
+      onSaved?.();
       return;
     }
     // Handoff validation — required for Leave / WFH / On Duty / Half Day.
@@ -394,8 +414,10 @@ export default function LeaveRequestForm({
       half_day: "Half-day", regularize: "Regularization",
     };
     showToast(`${TOAST_LABEL[kind] ?? "Request"} request submitted`, "success");
-    onSaved?.();
+    // Close FIRST — if the parent's onSaved refresh throws, the modal
+    // must not be stranded open after a successful save.
     onClose();
+    onSaved?.();
   };
 
   return (
@@ -418,53 +440,24 @@ export default function LeaveRequestForm({
               for WFH requests (other kinds don't have this quota). */}
           {kind === "wfh" && <WfhBalanceBadge />}
 
-          {/* Date range card — FROM and TO sit on the same row so the
-              two date pickers line up, with the "1 day" badge anchored
-              to the top-right of the card (not crammed beside FROM). */}
-          <div className="rounded-lg border border-slate-200 dark:border-white/[0.08] p-3">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400">Date range</p>
-              <span className="px-2 py-0.5 rounded-md bg-[#008CFF]/10 text-[#008CFF] dark:bg-[#4a9cff]/15 dark:text-[#4a9cff] text-[11px] font-semibold tabular-nums">
-                {days} day{days === 1 ? "" : "s"}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">From</p>
-                <DatePicker
-                  value={fromDate}
-                  onChange={(v) => {
-                    setFromDate(v);
-                    if (isHalfLeave || isShortLeave) setToDate(v);
-                    else if (v && (!toDate || new Date(v) > new Date(toDate))) setToDate(v);
-                  }}
-                  futureYears={2}
-                  minDate={minDate}
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">To</p>
-                {(isHalfLeave || isShortLeave) ? (
-                  <p className="text-[12.5px] text-slate-500 italic h-9 flex items-center">
-                    Same as From ({isShortLeave ? "short leave" : "half-day"}).
-                  </p>
-                ) : (
-                  <DatePicker
-                    value={toDate}
-                    onChange={setToDate}
-                    futureYears={2}
-                    minDate={fromDate || minDate}
-                    className="w-full"
-                  />
-                )}
-              </div>
-            </div>
-          </div>
+          {/* Leave type FIRST (2026-08-25) — the pickable dates depend on the
+              chosen type (Casual Leave needs 2 days' notice, so it pushes the
+              calendar's earliest date out), so the type is asked before the
+              dates. Rich picker shows per-type balance. For `kind=leave`
+              (incl. short leave) + optional for half_day. */}
+          {(kind === "leave" || (kind === "half_day" && leaveTypes && leaveTypes.length > 0)) && leaveTypes && leaveTypes.length > 0 && (
+            <LeaveTypePicker
+              leaveTypes={leaveTypes}
+              value={leaveTypeId}
+              onChange={setLeaveTypeId}
+            />
+          )}
 
           {/* Leave shape — Full / Half / Short. Half and Short both collapse to
               a single date; Half saves a [First/Second Half] marker, Short
-              saves a [Short Leave - Morning/Evening] marker (0.25 CL, 2h). */}
+              saves a [Short Leave - Morning/Evening] marker (0.25 CL, 2h).
+              Sits above the dates too: a Short leave is same-day, so it
+              un-clamps the notice-period date minimum. */}
           {kind === "leave" && (
             <div className="space-y-2">
               <div className="grid grid-cols-3 gap-2">
@@ -514,12 +507,56 @@ export default function LeaveRequestForm({
                       className={`h-8 rounded-md border text-[11.5px] font-medium transition-colors ${shortSlot === "evening" ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF] dark:border-[#4a9cff] dark:text-[#4a9cff]" : "border-slate-200 dark:border-white/[0.08] text-slate-500 dark:text-slate-400 hover:border-[#008CFF]/40"}`}>Evening (last 2h)</button>
                   </div>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
-                    2-hour leave from your shift's {shortSlot === "morning" ? "start" : "end"}. Deducts <b>0.25 day</b> from the leave type you pick below · max 2 per month.
+                    2-hour leave from your shift's {shortSlot === "morning" ? "start" : "end"}. Deducts <b>0.25 day</b> from the leave type picked above · max 2 per month.
                   </p>
                 </>
               )}
             </div>
           )}
+
+          {/* Date range card — FROM and TO sit on the same row so the
+              two date pickers line up, with the "1 day" badge anchored
+              to the top-right of the card (not crammed beside FROM). */}
+          <div className="rounded-lg border border-slate-200 dark:border-white/[0.08] p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400">Date range</p>
+              <span className="px-2 py-0.5 rounded-md bg-[#008CFF]/10 text-[#008CFF] dark:bg-[#4a9cff]/15 dark:text-[#4a9cff] text-[11px] font-semibold tabular-nums">
+                {days} day{days === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">From</p>
+                <DatePicker
+                  value={fromDate}
+                  onChange={(v) => {
+                    setFromDate(v);
+                    if (isHalfLeave || isShortLeave) setToDate(v);
+                    else if (v && (!toDate || new Date(v) > new Date(toDate))) setToDate(v);
+                  }}
+                  futureYears={2}
+                  minDate={minDate}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">To</p>
+                {(isHalfLeave || isShortLeave) ? (
+                  <p className="text-[12.5px] text-slate-500 italic h-9 flex items-center">
+                    Same as From ({isShortLeave ? "short leave" : "half-day"}).
+                  </p>
+                ) : (
+                  <DatePicker
+                    value={toDate}
+                    onChange={setToDate}
+                    futureYears={2}
+                    minDate={fromDate || minDate}
+                    className="w-full"
+                  />
+                )}
+              </div>
+            </div>
+          </div>
 
           {/* Policy */}
           {policyText && (
@@ -527,16 +564,6 @@ export default function LeaveRequestForm({
               <Info size={14} strokeWidth={2} className="text-[#008CFF] mt-0.5 shrink-0" />
               <p className="text-[11.5px] leading-snug text-[#008CFF] dark:text-[#4a9cff]">{policyText}</p>
             </div>
-          )}
-
-          {/* Leave type — for `kind=leave` (incl. short leave) + optional for
-              half_day. Rich picker shows per-type balance. */}
-          {(kind === "leave" || (kind === "half_day" && leaveTypes && leaveTypes.length > 0)) && leaveTypes && leaveTypes.length > 0 && (
-            <LeaveTypePicker
-              leaveTypes={leaveTypes}
-              value={leaveTypeId}
-              onChange={setLeaveTypeId}
-            />
           )}
 
           {/* Half-day toggle — applies to WFH and OD requests. Tags
