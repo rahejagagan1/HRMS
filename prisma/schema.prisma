@@ -123,6 +123,7 @@ model User {
   leaveApprovals               LeaveApplication[]           @relation("LeaveApprover")
   leaveFinalApprovals          LeaveApplication[]           @relation("LeaveFinalApprover")
   leaveCoverages               LeaveApplication[]           @relation("LeavePOC")
+  leavesFiled                  LeaveApplication[]           @relation("LeaveAppliedBy")
   heldAssets                   AssetAssignment[]
   ownedDocuments               EmployeeDocument[]           @relation("DocOwner")
   uploadedDocuments            EmployeeDocument[]           @relation("DocUploader")
@@ -1682,6 +1683,9 @@ model LeaveApplication {
   // workStatus is a free-text summary of pending tasks.
   pocUserId         Int?
   workStatus        String?   @db.Text
+  /// Who actually FILED this application — differs from userId when HR
+  /// applied on behalf of the employee. NULL on legacy rows (filer unknown).
+  appliedById       Int?
   appliedAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -1690,6 +1694,7 @@ model LeaveApplication {
   approver      User?     @relation("LeaveApprover", fields: [approvedById], references: [id])
   finalApprover User?     @relation("LeaveFinalApprover", fields: [finalApprovedById], references: [id])
   poc           User?     @relation("LeavePOC", fields: [pocUserId], references: [id], onDelete: SetNull)
+  appliedBy     User?     @relation("LeaveAppliedBy", fields: [appliedById], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([status])

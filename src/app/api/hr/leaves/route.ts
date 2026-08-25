@@ -79,7 +79,24 @@ export async function GET(req: NextRequest) {
       orderBy: { appliedAt: "desc" },
       take: view === "all" ? 500 : 100,
     });
-    return NextResponse.json(applications);
+    // Attach WHO FILED each application (appliedById) so the history table
+    // can show "filed by <HR name>" on on-behalf rows. Raw batch query (not
+    // an include) so a stale generated client can't hide the new column;
+    // legacy rows have NULL and simply get no appliedBy.
+    let withFiler: any[] = applications;
+    if (applications.length > 0) {
+      try {
+        const filers = await prisma.$queryRawUnsafe<Array<{ id: number; filerId: number; filerName: string }>>(
+          `SELECT la.id, u.id AS "filerId", u.name AS "filerName"
+             FROM "LeaveApplication" la JOIN "User" u ON u.id = la."appliedById"
+            WHERE la.id = ANY($1::int[])`,
+          applications.map((a) => a.id),
+        );
+        const byId = new Map(filers.map((f) => [f.id, { id: f.filerId, name: f.filerName }]));
+        withFiler = applications.map((a) => ({ ...a, appliedBy: byId.get(a.id) ?? null }));
+      } catch { /* column not migrated yet → render without filer info */ }
+    }
+    return NextResponse.json(withFiler);
   } catch (e) { return serverError(e, "GET /api/hr/leaves"); }
 }
 
@@ -460,6 +477,19 @@ export async function POST(req: NextRequest) {
       });
       return app;
     });
+
+    // Record who actually FILED the application — differs from the subject
+    // when HR applies on behalf. Raw SQL (not create data) so a stale
+    // generated client can't hide the new column; best-effort, a legacy
+    // NULL just renders as before.
+    try {
+      await prisma.$executeRawUnsafe(
+        `UPDATE "LeaveApplication" SET "appliedById" = $1 WHERE id = $2`,
+        myId, application.id,
+      );
+    } catch (e) {
+      console.warn("[POST /api/hr/leaves] appliedById stamp failed (leave saved):", e);
+    }
 
     // ── Post-commit, best-effort from here (2026-08-25) ────────────────
     // The leave row + pending-balance debit are COMMITTED above. Anything
