@@ -45,7 +45,23 @@ function Av({ name, url, size = 36 }: { name: string; url?: string; size?: numbe
   const initials = (name || "?").split(" ").map(p => p[0]).join("").slice(0, 2).toUpperCase();
   const colors = ["#4f46e5","#0891b2","#059669","#d97706","#dc2626","#7c3aed"];
   const bg = colors[(name || "?").charCodeAt(0) % colors.length];
-  if (url) return <img src={url} alt={name} className="rounded-full object-cover shrink-0" style={{ width: size, height: size }} />;
+  // Two things every avatar in this app needs, and this one was missing both:
+  //   referrerPolicy="no-referrer" — lh3.googleusercontent.com (74 of our 78
+  //     profile photos) answers 403 when a referrer it doesn't know is sent,
+  //     so the image failed here while rendering fine in panels that set it.
+  //   onError -> initials — without a fallback a failed load shows the
+  //     browser's broken-image glyph instead of the coloured monogram.
+  const [broken, setBroken] = useState(false);
+  if (url && !broken) return (
+    <img
+      src={url}
+      alt={name}
+      referrerPolicy="no-referrer"
+      onError={() => setBroken(true)}
+      className="rounded-full object-cover shrink-0"
+      style={{ width: size, height: size }}
+    />
+  );
   return (
     <div className="rounded-full flex items-center justify-center font-bold text-white shrink-0"
       style={{ width: size, height: size, background: bg, fontSize: size * 0.33 }}>
@@ -207,6 +223,14 @@ export default function InboxPage() {
   const [search, setSearch]       = useState("");
   const [sort, setSort]           = useState<"newest" | "oldest">("newest");
   const [approving, setApproving] = useState<Record<string, boolean>>({});
+  // Bulk selection — ids ticked in the middle list. Cleared whenever the
+  // category / tab / dataset changes so a stale id can never be acted on.
+  const [checkedIds, setCheckedIds] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy]     = useState(false);
+  // Status filter for the action view. "pending" (L1+L2) stays the default so
+  // the queue still reads as a to-do list; the other options surface decided
+  // rows from the last 90 days without leaving the tab.
+  const [statusView, setStatusView] = useState<"pending" | "approved" | "rejected" | "all">("pending");
 
   const endpoint =
     topTab === "archive"
@@ -222,9 +246,19 @@ export default function InboxPage() {
   // counts as one item, matching what the user sees in the list.
   const counts = useMemo(() => {
     if (!data || topTab === "notifications") return {} as Record<CatKey, number>;
+    // The action view's payload now includes decided rows (so the status
+    // filter can show them without a refetch), so the badge MUST apply the
+    // same filter — otherwise every category counted its entire 90-day
+    // history and "Leave Requests" badged 518 instead of the 132 pending.
+    const inView = (it: any) => {
+      if (topTab === "archive" || statusView === "all") return true;
+      return statusView === "pending"
+        ? it.status === "pending" || it.status === "partially_approved"
+        : it.status === statusView;
+    };
     return Object.fromEntries(
       CATEGORIES.map((c) => {
-        const arr = (data[c.bucket] ?? []) as any[];
+        const arr = ((data[c.bucket] ?? []) as any[]).filter(inView);
         if (c.key !== "wfh" && c.key !== "onDuty") return [c.key, arr.length];
         const seen = new Set<string>();
         for (const it of arr) {
@@ -237,12 +271,15 @@ export default function InboxPage() {
         return [c.key, seen.size];
       })
     ) as Record<CatKey, number>;
-  }, [data, topTab]);
+  }, [data, topTab, statusView]);
 
+  // Header total mirrors the badges: sum the (already filtered + de-duped)
+  // per-category counts rather than the API's raw total, which counts every
+  // row the payload carries regardless of the active status filter.
   const total = useMemo(() => {
     if (topTab === "notifications") return data?.unreadCount ?? 0;
-    return data?.total ?? 0;
-  }, [data, topTab]);
+    return Object.values(counts).reduce((t: number, n) => t + (Number(n) || 0), 0);
+  }, [data, topTab, counts]);
 
   // Items visible in the middle column for the current category.
   // For WFH / OnDuty we collapse per-day rows that came from the same
@@ -257,6 +294,13 @@ export default function InboxPage() {
     const cat = CATEGORIES.find(c => c.key === catKey);
     if (!cat) return [];
     let list: any[] = data[cat.bucket] ?? [];
+    // Status filter (action view only — Archive is decided-only already).
+    if (topTab !== "archive" && statusView !== "all") {
+      list = list.filter((it: any) =>
+        statusView === "pending"
+          ? it.status === "pending" || it.status === "partially_approved"
+          : it.status === statusView);
+    }
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter((it: any) =>
@@ -299,7 +343,7 @@ export default function InboxPage() {
       return sort === "newest" ? tb - ta : ta - tb;
     });
     return list;
-  }, [data, catKey, topTab, search, sort]);
+  }, [data, catKey, topTab, search, sort, statusView]);
 
   // Default selection: first item whenever the category or dataset changes.
   useEffect(() => {
@@ -338,6 +382,51 @@ export default function InboxPage() {
     }
   };
 
+  // ── Bulk approve / reject ─────────────────────────────────────────────
+  // Only pending rows are actionable, so "select all" ticks exactly those —
+  // never an already-decided row in the Archive tab. Each ticked row expands
+  // to its own `_groupIds` (a grouped WFH/OD range is several day rows), and
+  // every resulting PUT is fired together, mirroring single-row act().
+  const actionableItems = useMemo(
+    () => items.filter((it: any) => it.status === "pending" || it.status === "partially_approved"),
+    [items],
+  );
+  const checkedSet = useMemo(() => new Set(checkedIds), [checkedIds]);
+  const allChecked = actionableItems.length > 0 && actionableItems.every((it: any) => checkedSet.has(it.id));
+  const someChecked = checkedIds.length > 0 && !allChecked;
+  const toggleOne = (id: number) =>
+    setCheckedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleAll = () =>
+    setCheckedIds(allChecked ? [] : actionableItems.map((it: any) => it.id));
+
+  const actBulk = async (action: "approve" | "reject") => {
+    const chosen = actionableItems.filter((it: any) => checkedSet.has(it.id));
+    if (chosen.length === 0) return;
+    if (action === "reject" && !confirm(`Reject ${chosen.length} request${chosen.length === 1 ? "" : "s"}?`)) return;
+    setBulkBusy(true);
+    try {
+      const calls: Promise<any>[] = [];
+      for (const item of chosen) {
+        const ids: number[] = Array.isArray(item._groupIds) && item._groupIds.length > 0 ? item._groupIds : [item.id];
+        for (const id of ids) {
+          const { url, body } = approvalUrlFor(activeCat, { ...item, id }, action);
+          calls.push(fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+        }
+      }
+      const res = await Promise.allSettled(calls);
+      const failed = res.filter(r => r.status === "rejected" || (r.status === "fulfilled" && !(r.value as Response).ok)).length;
+      if (failed > 0) alert(`${calls.length - failed} of ${calls.length} succeeded — ${failed} failed. Refreshing.`);
+      setCheckedIds([]);
+      mutate((k: string) => typeof k === "string" && (
+        k.includes("/api/hr/leaves") || k.includes("/api/hr/expenses") ||
+        k.includes("/api/hr/attendance") || k.includes("/api/hr/inbox") ||
+        k.includes("/api/hr/notifications")
+      ));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   // ─────────────────────────────────────────────────────────────────────
   // Render
   // ─────────────────────────────────────────────────────────────────────
@@ -351,6 +440,9 @@ export default function InboxPage() {
             ? `${total} unread notification${total !== 1 ? "s" : ""}`
             : topTab === "archive"
             ? `${total} recently resolved`
+            : statusView === "approved" ? `${total} approved request${total !== 1 ? "s" : ""}`
+            : statusView === "rejected" ? `${total} rejected request${total !== 1 ? "s" : ""}`
+            : statusView === "all"      ? `${total} request${total !== 1 ? "s" : ""}`
             : `${total} pending action${total !== 1 ? "s" : ""} require your attention`}
         </p>
       </div>
@@ -364,7 +456,7 @@ export default function InboxPage() {
         ] as const).map(({ key, label, Icon }) => (
           <button
             key={key}
-            onClick={() => setTopTab(key)}
+            onClick={() => { setTopTab(key); setCheckedIds([]); }}
             className={`flex items-center gap-2 px-4 py-3 text-[11px] font-bold tracking-widest border-b-2 transition-colors ${
               topTab === key
                 ? "border-[#008CFF] text-[#008CFF]"
@@ -396,7 +488,7 @@ export default function InboxPage() {
                 return (
                   <button
                     key={cat.key}
-                    onClick={() => { setCatKey(cat.key); setSelected(null); }}
+                    onClick={() => { setCatKey(cat.key); setSelected(null); setCheckedIds([]); }}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-[12.5px] transition-colors text-left ${
                       active
                         ? "bg-[#008CFF]/10 text-[#008CFF]"
@@ -422,6 +514,19 @@ export default function InboxPage() {
               <p className={`text-[10px] font-bold tracking-widest ${C.t2} uppercase flex-1 truncate`}>
                 {activeCat.label}
               </p>
+              {topTab !== "archive" && (
+                <SelectField
+                  value={statusView}
+                  onChange={(v) => { setStatusView(v as any); setSelected(null); setCheckedIds([]); }}
+                  options={[
+                    { value: "pending",  label: "PENDING" },
+                    { value: "approved", label: "APPROVED" },
+                    { value: "rejected", label: "REJECTED" },
+                    { value: "all",      label: "ALL" },
+                  ]}
+                  className={`h-7 w-[112px] text-[10px] font-semibold tracking-wider uppercase bg-transparent ${C.t2} border-0`}
+                />
+              )}
               <SelectField
                 value={sort}
                 onChange={(v) => setSort(v as any)}
@@ -443,6 +548,41 @@ export default function InboxPage() {
                 />
               </div>
             </div>
+            {/* Select-all + bulk action bar — only where rows are actionable. */}
+            {actionableItems.length > 0 && (
+              <div className={`flex items-center gap-2 px-4 py-2 border-b ${C.divider} ${checkedIds.length ? "bg-[#008CFF]/5" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  ref={(el) => { if (el) el.indeterminate = someChecked; }}
+                  onChange={toggleAll}
+                  aria-label="Select all pending requests"
+                  className="h-3.5 w-3.5 rounded border-slate-300 accent-[#008CFF] cursor-pointer"
+                />
+                <span className={`text-[11px] font-semibold ${C.t2}`}>
+                  {checkedIds.length > 0 ? `${checkedIds.length} selected` : `Select all (${actionableItems.length})`}
+                </span>
+                {checkedIds.length > 0 && (
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <button
+                      onClick={() => actBulk("approve")}
+                      disabled={bulkBusy}
+                      className="h-7 px-3 rounded-md bg-emerald-500 text-white text-[11px] font-semibold hover:bg-emerald-600 disabled:opacity-60"
+                    >{bulkBusy ? "Working…" : `Approve ${checkedIds.length}`}</button>
+                    <button
+                      onClick={() => actBulk("reject")}
+                      disabled={bulkBusy}
+                      className="h-7 px-3 rounded-md border border-red-300 text-red-600 text-[11px] font-semibold hover:bg-red-50 disabled:opacity-60"
+                    >Reject</button>
+                    <button
+                      onClick={() => setCheckedIds([])}
+                      disabled={bulkBusy}
+                      className={`h-7 px-2 rounded-md text-[11px] font-semibold ${C.t3} hover:underline disabled:opacity-60`}
+                    >Clear</button>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="overflow-y-auto max-h-[calc(100vh-260px)]">
               {isLoading ? (
                 <div className="flex items-center justify-center h-40">
@@ -460,28 +600,47 @@ export default function InboxPage() {
                 items.map((item: any) => {
                   const active = item.id === selectedId;
                   const when   = item.createdAt ?? item.appliedAt ?? item.updatedAt;
+                  const isActionable = item.status === "pending" || item.status === "partially_approved";
                   return (
-                    <button
+                    <div
                       key={item.id}
-                      onClick={() => setSelected(item.id)}
-                      className={`w-full text-left flex items-start gap-3 px-4 py-3 border-b ${C.divider} transition-colors ${
+                      className={`w-full flex items-start gap-2 px-4 py-3 border-b ${C.divider} transition-colors ${
                         active ? "bg-[#008CFF]/5 border-l-2 border-l-[#008CFF]" : "hover:bg-slate-50 dark:hover:bg-white/[0.025]"
                       }`}
                     >
+                      {/* Tickbox sits OUTSIDE the row button — a checkbox nested
+                          in a <button> is invalid markup and the button would
+                          swallow its clicks. Decided rows aren't selectable. */}
+                      {isActionable ? (
+                        <input
+                          type="checkbox"
+                          checked={checkedSet.has(item.id)}
+                          onChange={() => toggleOne(item.id)}
+                          aria-label={`Select ${item.user?.name || "request"}`}
+                          className="mt-3 h-3.5 w-3.5 shrink-0 rounded border-slate-300 accent-[#008CFF] cursor-pointer"
+                        />
+                      ) : <span className="w-3.5 shrink-0" />}
+                      <button
+                        type="button"
+                        onClick={() => setSelected(item.id)}
+                        className="flex-1 min-w-0 text-left flex items-start gap-3"
+                      >
                       <Av name={item.user?.name || "?"} url={item.user?.profilePictureUrl} size={32} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <p className={`text-[12.5px] font-semibold ${C.t1} truncate`}>{item.user?.name || "Employee"}</p>
+                          <StageBadge status={item.status} />
                           {when && <span className={`text-[10px] ${C.t3} shrink-0`}>{fmtRel(when)}</span>}
                         </div>
                         <p className={`text-[11px] ${C.t2} truncate mt-0.5`}>
                           {previewFor(activeCat, item)}
                         </p>
-                        {topTab === "archive" && (
+                        {(topTab === "archive" || statusView !== "pending") && (
                           <StatusPill status={item.status} />
                         )}
                       </div>
-                    </button>
+                      </button>
+                    </div>
                   );
                 })
               )}
@@ -512,7 +671,10 @@ export default function InboxPage() {
                     </p>
                   </div>
                   {topTab === "archive" && (
-                    <div className="ml-auto"><StatusPill status={selected.status} size="lg" /></div>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <StageBadge status={selected.status} />
+                      <StatusPill status={selected.status} size="lg" />
+                    </div>
                   )}
                 </div>
 
@@ -592,6 +754,26 @@ function previewFor(cat: Cat, it: any): string {
 // ─────────────────────────────────────────────────────────────────────────────
 // Status pill for archive view.
 // ─────────────────────────────────────────────────────────────────────────────
+/** Which approval stage a request is sitting at.
+ *  L1 = pending      → waiting on the reporting manager
+ *  L2 = partially_approved → manager done, waiting on the final approver
+ *  Decided rows render nothing. */
+function StageBadge({ status }: { status?: string }) {
+  const stage = status === "pending" ? "L1" : status === "partially_approved" ? "L2" : null;
+  if (!stage) return null;
+  const isL1 = stage === "L1";
+  return (
+    <span
+      title={isL1 ? "Level 1 — awaiting manager approval" : "Level 2 — manager approved, awaiting final approval"}
+      className={`shrink-0 inline-flex items-center justify-center h-[15px] min-w-[20px] px-1 rounded text-[9px] font-bold tracking-wide ring-1 ring-inset ${
+        isL1
+          ? "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 ring-amber-500/30"
+          : "bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-400 ring-violet-500/30"
+      }`}
+    >{stage}</span>
+  );
+}
+
 function StatusPill({ status, size = "sm" }: { status: string; size?: "sm" | "lg" }) {
   const map: Record<string, { label: string; cls: string }> = {
     approved:            { label: "Approved",  cls: "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },

@@ -633,8 +633,11 @@ function StatusPill({ status, outcome }: { status: string; outcome: string | nul
 }
 
 function Avatar({ name, src, size = 24 }: { name: string; src: string | null; size?: number }) {
-  if (src) {
-    return <img src={src} alt={name} width={size} height={size} className="rounded-full object-cover" />;
+  // Google avatar URLs (lh3) 403 without no-referrer; onError falls back
+  // to the monogram instead of the browser's broken-image glyph.
+  const [broken, setBroken] = useState(false);
+  if (src && !broken) {
+    return <img src={src} alt={name} width={size} height={size} referrerPolicy="no-referrer" onError={() => setBroken(true)} className="rounded-full object-cover" />;
   }
   return (
     <span

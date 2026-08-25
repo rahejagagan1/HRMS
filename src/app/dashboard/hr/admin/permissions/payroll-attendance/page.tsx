@@ -306,9 +306,12 @@ function Toggle({ on, disabled, onClick, accent }: { on: boolean; disabled?: boo
 }
 
 function Avatar({ name, url }: { name: string; url: string | null }) {
-  if (url) {
+  // Google avatar URLs (lh3) 403 without no-referrer; onError falls back
+  // to the monogram instead of the browser's broken-image glyph.
+  const [broken, setBroken] = useState(false);
+  if (url && !broken) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-slate-200" />;
+    return <img src={url} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="h-8 w-8 rounded-full object-cover ring-1 ring-slate-200" />;
   }
   const ch = (name || "?").trim().slice(0, 1).toUpperCase();
   return (

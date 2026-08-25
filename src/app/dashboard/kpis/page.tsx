@@ -37,7 +37,10 @@ function Avatar({ name, url, size = 30 }: { name: string | null; url?: string | 
   const initials = display.split(" ").map(p => p[0] || "").join("").slice(0, 2).toUpperCase();
   const palette = ["#4f46e5","#0891b2","#059669","#d97706","#dc2626","#7c3aed","#0f6ecd"];
   const bg = palette[display.charCodeAt(0) % palette.length];
-  if (url) return <img src={url} alt={display} className="rounded-full object-cover shrink-0" style={{ width: size, height: size }} />;
+  // Google avatar URLs (lh3) 403 without no-referrer; onError falls back
+  // to the monogram instead of the browser's broken-image glyph.
+  const [broken, setBroken] = useState(false);
+  if (url && !broken) return <img src={url} alt={display} referrerPolicy="no-referrer" onError={() => setBroken(true)} className="rounded-full object-cover shrink-0" style={{ width: size, height: size }} />;
   return (
     <div
       className="rounded-full flex items-center justify-center font-bold text-white shrink-0"

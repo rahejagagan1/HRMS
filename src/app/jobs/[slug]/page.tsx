@@ -659,26 +659,25 @@ export default async function PublicJobDetailPage({ params }: { params: Promise<
                   Got questions?
                 </p>
                 <a
-                  href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent("tanvi@nbmediaproductions.com")}`}
+                  href={`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent("hrd@nbmediaproductions.com")}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  aria-label="Email Tanvi, HR Manager"
+                  aria-label="Email the HR Department"
                   className="group flex items-center gap-3 rounded-xl bg-white border border-slate-200 hover:border-[#3b82f6] hover:shadow-[0_4px_12px_-4px_rgba(59,130,246,0.18)] px-3 py-2.5 transition-all"
                 >
                   <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#3b82f6] text-white text-[12px] font-bold uppercase shrink-0 shadow-[0_2px_6px_-1px_rgba(59,130,246,0.4)]">
-                    T
+                    HR
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-semibold text-slate-900 leading-tight tracking-[-0.005em]">
-                      Tanvi
-                      <span className="ml-1.5 text-[11px] font-medium text-slate-400">HR Manager</span>
+                      HR Dept.
                     </p>
                     {/* Email is allowed to wrap (break-all) so the
                         full address is always visible in the narrow
                         sidebar column instead of being truncated to
                         "tanvi@nbmediap…". */}
                     <p className="mt-1 text-[11px] text-slate-500 leading-snug break-all group-hover:text-[#3b82f6] transition-colors">
-                      tanvi@nbmediaproductions.com
+                      hrd@nbmediaproductions.com
                     </p>
                   </div>
                   <Mail size={13} strokeWidth={2.25} className="text-slate-300 group-hover:text-[#3b82f6] transition-colors shrink-0" />

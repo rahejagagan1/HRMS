@@ -15,8 +15,12 @@ function Avatar({ name, url, size = 36 }: { name: string; url?: string | null; s
   const initials = name.split(" ").map(p => p[0]).join("").slice(0, 2).toUpperCase();
   const colors = ["bg-violet-500","bg-emerald-500","bg-[#008CFF]","bg-amber-500","bg-pink-500","bg-teal-500"];
   const color  = colors[name.charCodeAt(0) % colors.length];
-  return url ? (
+  // Google avatar URLs (lh3) 403 without no-referrer; onError falls back
+  // to the monogram instead of the browser's broken-image glyph.
+  const [broken, setBroken] = useState(false);
+  return url && !broken ? (
     <img src={url} alt={name} style={{ width: size, height: size }}
+      referrerPolicy="no-referrer" onError={() => setBroken(true)}
       className="rounded-full object-cover shrink-0" />
   ) : (
     <div style={{ width: size, height: size }}

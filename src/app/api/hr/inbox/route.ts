@@ -31,12 +31,28 @@ export async function GET(req: NextRequest) {
     const teamFilter = isAdmin ? {} : { user: { managerId: myId } };
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
-    // Status filter differs per view. Archive looks at decided items updated
-    // within the last 90 days; pending is the classic approvals inbox.
+    // Status filter differs per view. Archive = genuinely DECIDED items from
+    // the last 90 days. The action view carries BOTH approval stages:
+    //   pending            = L1, waiting on the reporting manager
+    //   partially_approved = L2, manager done, waiting on the final approver
+    // partially_approved used to be filed under "archive", so an L1-approved
+    // request vanished from the action queue and sat in a tab labelled
+    // "resolved" — the final approver was never shown the very requests
+    // waiting on them (207 org-wide when this was found). The Approvals panel
+    // (/api/hr/approvals) always counted both, so the two surfaces disagreed.
+    // The action view returns decided rows too (last 90 days) so the page can
+    // offer a status filter — "Pending" stays the default, but an approver can
+    // switch to Approved / Rejected / All without leaving the tab. Filtering
+    // happens client-side; the payload stays one round-trip.
     const statusFilter =
       view === "archive"
-        ? { status: { in: ["approved", "rejected", "partially_approved"] }, updatedAt: { gte: ninetyDaysAgo } }
-        : { status: "pending" };
+        ? { status: { in: ["approved", "rejected"] }, updatedAt: { gte: ninetyDaysAgo } }
+        : {
+            OR: [
+              { status: { in: ["pending", "partially_approved"] } },
+              { status: { in: ["approved", "rejected"] }, updatedAt: { gte: ninetyDaysAgo } },
+            ],
+          };
     const orderBy = view === "archive" ? { updatedAt: "desc" as const } : { createdAt: "desc" as const };
 
     const userSelect = { select: { id: true, name: true, profilePictureUrl: true } };

@@ -235,8 +235,8 @@ export async function GET(req: NextRequest) {
       // shift-progress bar, "time left", AND the absent / weekly-off synthesis
       // (working-day decision). Raw SQL so the saturday* columns work before
       // `prisma generate` picks them up.
-      prisma.$queryRawUnsafe<Array<{ effectiveFrom: Date; startTime: string; endTime: string; breakMinutes: number; workDays: unknown; saturdayPolicy: string; saturdayWeeks: number[]; shiftCreatedAt: Date }>>(
-        `SELECT us."effectiveFrom", s."startTime", s."endTime", s."breakMinutes", s."workDays", s."saturdayPolicy", s."saturdayWeeks", s."createdAt" AS "shiftCreatedAt"
+      prisma.$queryRawUnsafe<Array<{ effectiveFrom: Date; startTime: string; endTime: string; breakMinutes: number; workDays: unknown; saturdayPolicy: string; saturdayWeeks: number[]; saturdayDates: string[]; shiftCreatedAt: Date }>>(
+        `SELECT us."effectiveFrom", s."startTime", s."endTime", s."breakMinutes", s."workDays", s."saturdayPolicy", s."saturdayWeeks", s."saturdayDates", s."createdAt" AS "shiftCreatedAt"
            FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId" WHERE us."userId" = $1`,
         targetUserId,
       ),
@@ -278,6 +278,11 @@ export async function GET(req: NextRequest) {
       shift: usRow ? {
         startTime: usRow.startTime, endTime: usRow.endTime, breakMinutes: usRow.breakMinutes,
         workDays: usRow.workDays, saturdayPolicy: usRow.saturdayPolicy, saturdayWeeks: usRow.saturdayWeeks,
+        // Hand-picked working Saturdays for the "dates" policy. Omitting this
+        // made isWorkingDay() see an EMPTY list on the client, so every
+        // Saturday rendered "Weekly-off" even when the shift listed it as a
+        // working Saturday (e.g. 2026-08-22 for the whole NB Media roster).
+        saturdayDates: usRow.saturdayDates,
         // Shift-level anchor for the alternate-Saturday phase (uniform across
         // all users on the shift). The client passes this to isWorkingDay.
         createdAt: usRow.shiftCreatedAt,
