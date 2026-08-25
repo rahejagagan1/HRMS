@@ -21,8 +21,13 @@ function Avatar({ name, url, size = 40 }: { name: string; url?: string | null; s
   const initials = name.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
   const palette = ["bg-[#008CFF]", "bg-emerald-500", "bg-violet-500", "bg-amber-500", "bg-pink-500", "bg-teal-500"];
   const color = palette[name.charCodeAt(0) % palette.length];
-  return url ? (
+  // no-referrer + onError: Google avatar URLs 403 without the former and
+  // would otherwise render the browser's broken-image glyph (see Av in
+  // dashboard/hr/inbox). Falls back to the coloured monogram.
+  const [broken, setBroken] = useState(false);
+  return url && !broken ? (
     <img src={url} alt={name} style={{ width: size, height: size }}
+      referrerPolicy="no-referrer" onError={() => setBroken(true)}
       className="rounded-full object-cover ring-2 ring-white dark:ring-[#001529] shrink-0" />
   ) : (
     <div style={{ width: size, height: size }}
