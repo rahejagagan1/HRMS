@@ -99,7 +99,17 @@ export async function GET(req: NextRequest) {
       wfh,
       onDuty,
       compOff,
-      total: leaves.length + expenses.length + regs.length + wfh.length + onDuty.length + compOff.length,
+      // `total` drives the sidebar "Approval Request" badge, so it must count
+      // only what still needs a decision. The action view's arrays now also
+      // carry decided rows (so the page's status filter works without a
+      // refetch) — counting them raw would have badged ~1,300 instead of the
+      // real pending figure. Archive rows are all decided, so there we count
+      // everything.
+      total: view === "archive"
+        ? leaves.length + expenses.length + regs.length + wfh.length + onDuty.length + compOff.length
+        : [leaves, expenses, regs, wfh, onDuty, compOff]
+            .reduce((sum, arr) => sum + (arr as Array<{ status: string }>).filter(
+              (r) => r.status === "pending" || r.status === "partially_approved").length, 0),
     });
   } catch (e) { return serverError(e, "GET /api/hr/inbox"); }
 }

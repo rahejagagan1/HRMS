@@ -200,7 +200,7 @@ function detailFor(cat: Cat, item: any, siblings: any[]) {
 }
 
 // Route each approval action to the right endpoint.
-function approvalUrlFor(cat: Cat, item: any, action: "approve" | "reject") {
+function approvalUrlFor(cat: Cat, item: any, action: "approve" | "reject" | "cancel") {
   switch (cat.key) {
     case "leaves":          return { url: `/api/hr/leaves/${item.id}`,           body: { action } };
     case "expenses":        return { url: `/api/hr/expenses/${item.id}`,         body: { action } };
@@ -359,7 +359,7 @@ export default function InboxPage() {
   // day row in parallel so the entire range is decided in one click.
   // For everything else there's no `_groupIds` and we hit the single
   // id like before.
-  const act = async (action: "approve" | "reject") => {
+  const act = async (action: "approve" | "reject" | "cancel") => {
     if (!selected) return;
     const ids: number[] = Array.isArray(selected._groupIds) && selected._groupIds.length > 0
       ? selected._groupIds
@@ -696,20 +696,54 @@ export default function InboxPage() {
                   </div>
                 )}
 
-                {topTab === "take_action" && (
-                  <div className="mt-8 flex items-center gap-3">
+                {/* Actions follow the row's ACTUAL status. Offering "Approve"
+                    on an already-approved request is meaningless, and every
+                    API rejects a decide-twice: leaves answer 400 ("Only
+                    pending leaves can be rejected") and WFH / OD /
+                    regularization answer 409 ("Request has already been
+                    decided"). So a decided row only gets an action the server
+                    will actually honour — for leaves that's `cancel`, which
+                    accepts an approved row and refunds the balance; the other
+                    types have no reversal endpoint at all. */}
+                {topTab === "take_action" && (() => {
+                  const st = selected.status;
+                  const busy = approving[`${activeCat.prefix}${selected.id}`];
+                  const isPending = st === "pending" || st === "partially_approved";
+                  const approveBtn = (
                     <button
                       onClick={() => act("approve")}
-                      disabled={approving[`${activeCat.prefix}${selected.id}`]}
+                      disabled={busy}
                       className="h-9 px-5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 text-white rounded-lg text-[12.5px] font-semibold"
-                    >Approve</button>
+                    >{st === "partially_approved" ? "Final approve" : "Approve"}</button>
+                  );
+                  const rejectBtn = (
                     <button
                       onClick={() => act("reject")}
-                      disabled={approving[`${activeCat.prefix}${selected.id}`]}
+                      disabled={busy}
                       className="h-9 px-5 bg-white dark:bg-white/5 hover:bg-red-50 dark:hover:bg-red-500/10 border border-red-300 dark:border-red-500/30 text-red-600 dark:text-red-400 disabled:opacity-40 rounded-lg text-[12.5px] font-semibold"
                     >Reject</button>
-                  </div>
-                )}
+                  );
+                  const cancelBtn = (
+                    <button
+                      onClick={() => { if (confirm("Cancel this approved leave? The leave balance is credited back.")) act("cancel"); }}
+                      disabled={busy}
+                      className="h-9 px-5 bg-white dark:bg-white/5 hover:bg-red-50 dark:hover:bg-red-500/10 border border-red-300 dark:border-red-500/30 text-red-600 dark:text-red-400 disabled:opacity-40 rounded-lg text-[12.5px] font-semibold"
+                    >Cancel leave</button>
+                  );
+                  return (
+                    <div className="mt-8 flex items-center gap-3">
+                      {isPending && <>{approveBtn}{rejectBtn}</>}
+                      {st === "approved" && (
+                        activeCat.key === "leaves"
+                          ? cancelBtn
+                          : <span className={`text-[11.5px] ${C.t3}`}>Already approved. This request type has no reversal — raise a new request instead.</span>
+                      )}
+                      {st === "rejected" && (
+                        <span className={`text-[11.5px] ${C.t3}`}>Already rejected. It can&apos;t be re-approved — the employee needs to re-apply.</span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </section>
