@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import { requireAuth, isLeadershipOrHR, resolveUserId, serverError } from "@/lib/api-auth";
 import { sanitizeLetterHtml } from "@/lib/hr/letter-render";
 import { repairLetterTemplateStructure } from "@/lib/hr/letter-template-repair";
+import { canViewAllBrands } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 export const runtime  = "nodejs";
@@ -36,7 +37,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ key
     const viewer = session!.user as any;
     const viewerBrand: string = viewer?.businessUnit || "NB Media";
     const requestedBrand = slugToBrand(slugParam);
-    const mayCrossBrand = viewer?.isDeveloper === true || requestedBrand === viewerBrand;
+    // Developers and VIEW_ALL_BRANDS holders (the app-wide cross-brand
+    // allowlist) may read/write the other brand's row (policy 2026-08-26).
+    const mayCrossBrand = canViewAllBrands(viewer) || requestedBrand === viewerBrand;
     const effectiveBrand: string = mayCrossBrand && requestedBrand ? requestedBrand : viewerBrand;
 
     const rows = await prisma.$queryRawUnsafe<any[]>(
@@ -106,7 +109,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ ke
     const viewer = session!.user as any;
     const viewerBrand: string = viewer?.businessUnit || "NB Media";
     const requestedBrand = slugToBrand(urlBrand);
-    const mayCrossBrand = viewer?.isDeveloper === true || requestedBrand === viewerBrand;
+    // Developers and VIEW_ALL_BRANDS holders (the app-wide cross-brand
+    // allowlist) may read/write the other brand's row (policy 2026-08-26).
+    const mayCrossBrand = canViewAllBrands(viewer) || requestedBrand === viewerBrand;
     const effectiveBrand: string = mayCrossBrand && requestedBrand ? requestedBrand : viewerBrand;
 
     const editorId = await resolveUserId(session);

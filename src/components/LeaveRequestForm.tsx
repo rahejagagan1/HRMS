@@ -223,9 +223,32 @@ export default function LeaveRequestForm({
   // the earliest selectable date forward — the server enforces the same rule
   // via checkNoticePeriod, this just makes it visible while picking.
   const selectedLeaveType = leaveTypes?.find((t) => t.id === leaveTypeId) ?? null;
+  // Floater Leave is date-locked server-side to the optional-holiday
+  // calendar (Pongal, Raksha Bandhan, …) — mirror that in the form by
+  // swapping the free date pickers for a dropdown of the valid dates.
+  // Same match rule as the server: code "FL" with a name fallback.
+  const isFloaterType = kind === "leave" && !!selectedLeaveType
+    && (selectedLeaveType.code === "FL" || /floater/i.test(selectedLeaveType.name));
+  const { data: holidayRows } = useSWR<any[]>(
+    isFloaterType ? `/api/hr/admin/holidays?year=${today.slice(0, 4)}` : null,
+    fetcher,
+  );
   const minDate = kind === "leave"
     ? leaveMinDateForType(me, selectedLeaveType?.code, { shortLeave: isShortLeave })
     : leaveMinDate(me);
+  // Bookable floater dates: optional-type holidays, today onwards (the
+  // back-dating tier, which has no minDate clamp, also sees past dates).
+  const floaterDates: { date: string; name: string }[] = (Array.isArray(holidayRows) ? holidayRows : [])
+    .filter((h: any) => h.type === "optional")
+    .map((h: any) => ({ date: String(h.date).slice(0, 10), name: String(h.name ?? "") }))
+    .filter((h) => (minDate ? h.date >= today : true))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  // A floater is the whole optional holiday off — force full-day shape so
+  // the Half/Short toggles (and their reason markers) never combine with it.
+  useEffect(() => {
+    if (isFloaterType && dayKind !== "full") setDayKind("full");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFloaterType]);
   // Keep the picked dates valid when the minimum moves — e.g. selecting
   // Casual Leave pushes the earliest date +2 days, so a previously-picked
   // "today" would silently fail on submit. Apply-mode only: edit mode must
@@ -279,6 +302,8 @@ export default function LeaveRequestForm({
     if (new Date(fromDate) > new Date(toDate)) return setErr("From date must be on/before To date");
     if (!note.trim()) return setErr("Reason is required.");
     if (kind === "leave" && !leaveTypeId) return setErr("Please choose a leave type");
+    if (isFloaterType && !floaterDates.some((h) => h.date === fromDate))
+      return setErr("Pick one of the optional-holiday dates for Floater Leave.");
 
     // ── Edit mode (leave only) ──────────────────────────────────────────
     // PUT the changed core fields to the existing pending leave. The server
@@ -457,8 +482,9 @@ export default function LeaveRequestForm({
               a single date; Half saves a [First/Second Half] marker, Short
               saves a [Short Leave - Morning/Evening] marker (0.25 CL, 2h).
               Sits above the dates too: a Short leave is same-day, so it
-              un-clamps the notice-period date minimum. */}
-          {kind === "leave" && (
+              un-clamps the notice-period date minimum. Hidden for Floater
+              Leave — a floater is always the full optional-holiday day. */}
+          {kind === "leave" && !isFloaterType && (
             <div className="space-y-2">
               <div className="grid grid-cols-3 gap-2">
                 {[
@@ -524,6 +550,38 @@ export default function LeaveRequestForm({
                 {days} day{days === 1 ? "" : "s"}
               </span>
             </div>
+            {isFloaterType ? (
+              /* Floater Leave: only the optional-holiday calendar dates are
+                 bookable (server enforces the same lock), so offer exactly
+                 those instead of a free date picker. Picking one sets both
+                 From and To — a floater is a single day. */
+              <div>
+                <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
+                  Optional holiday
+                </p>
+                {floaterDates.length === 0 ? (
+                  <p className="text-[12px] text-slate-500 italic py-1.5">
+                    No optional-holiday dates {holidayRows ? "left this year — Floater Leave can't be booked." : "… loading."}
+                  </p>
+                ) : (
+                  <select
+                    value={floaterDates.some((h) => h.date === fromDate) ? fromDate : ""}
+                    onChange={(e) => { setFromDate(e.target.value); setToDate(e.target.value); }}
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-transparent px-2.5 text-[13px] text-slate-800 dark:text-white focus:outline-none focus:border-[#008CFF]"
+                  >
+                    <option value="" disabled>— Pick the optional holiday —</option>
+                    {floaterDates.map((h) => (
+                      <option key={h.date} value={h.date}>
+                        {new Date(`${h.date}T00:00:00Z`).toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short", timeZone: "UTC" })} — {h.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                  Floater Leave can only be taken on an optional-holiday date.
+                </p>
+              </div>
+            ) : (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <p className="text-[10.5px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 mb-1.5">From</p>
@@ -556,6 +614,7 @@ export default function LeaveRequestForm({
                 )}
               </div>
             </div>
+            )}
           </div>
 
           {/* Policy */}

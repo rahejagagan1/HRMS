@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, isLeadershipOrHR, serverError } from "@/lib/api-auth";
+import { canViewAllBrands } from "@/lib/access";
 import { LETTER_TEMPLATE_SEEDS } from "@/lib/hr/letter-template-seeds";
 import { sanitizeLetterHtml } from "@/lib/hr/letter-render";
 
@@ -35,7 +36,10 @@ export async function GET(req: NextRequest) {
     const viewerBrand: string = viewer?.businessUnit || "NB Media";
 
     if (wantAll) {
-      if (viewer?.isDeveloper !== true) {
+      // Cross-brand listing: developers AND VIEW_ALL_BRANDS holders (the
+      // app-wide cross-brand allowlist — policy 2026-08-26: a cross-brand
+      // HR manages both companies' templates).
+      if (!canViewAllBrands(viewer)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
       const rows = await prisma.$queryRawUnsafe<any[]>(
@@ -55,7 +59,10 @@ export async function GET(req: NextRequest) {
     const requestedBrand = urlBrand && (urlBrand === "NB Media" || urlBrand === "YT Labs")
       ? urlBrand
       : null;
-    const mayCrossBrand = viewer?.isDeveloper === true || requestedBrand === viewerBrand;
+    // VIEW_ALL_BRANDS = the app-wide cross-brand allowlist (canViewAllBrands
+    // also covers developers) — holders may switch brands here too
+    // (policy 2026-08-26).
+    const mayCrossBrand = canViewAllBrands(viewer) || requestedBrand === viewerBrand;
     const effectiveBrand = mayCrossBrand && requestedBrand ? requestedBrand : viewerBrand;
 
     const rows = await prisma.$queryRawUnsafe<any[]>(
