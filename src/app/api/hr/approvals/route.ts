@@ -135,6 +135,10 @@ export async function GET(req: NextRequest) {
           ...statusFilter(["pending", "partially_approved"]),
           ...teamWhere,
           ...leaveMonth,
+          // Comp-off SPEND applications live on the Comp Offs tab (with the
+          // earn requests), not here — double-listing made the Leave queue
+          // look bigger than it is and split one decision across two tabs.
+          NOT: { leaveType: { name: { contains: "comp off", mode: "insensitive" } } },
         },
         include: {
           leaveType: true,
@@ -209,13 +213,47 @@ export async function GET(req: NextRequest) {
 
     if (tab === "comp_off") {
       // Comp-off also runs the L1 → L2 flow now — include partially_approved.
-      const rows = await prisma.compOffRequest.findMany({
-        where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...workedMonth },
-        include: includeUser,
-        orderBy: { workedDate: "desc" },
-        take: 300,
-      });
-      return NextResponse.json(serializeBigInt({ items: rows, count: rows.length }));
+      // The tab carries BOTH sides of comp-off:
+      //   • earn  — CompOffRequest rows ("I worked a day off, credit me")
+      //   • spend — LeaveApplication rows on the Comp Offs leave type
+      //             (previously buried in the Leave tab, so HR looked for
+      //             them here and found nothing). _kind discriminates; the
+      //             panel routes spend actions to /api/hr/leaves/[id].
+      const [rows, spendRows] = await Promise.all([
+        prisma.compOffRequest.findMany({
+          where: { ...statusFilter(["pending", "partially_approved"]), ...teamWhere, ...workedMonth },
+          include: includeUser,
+          orderBy: { workedDate: "desc" },
+          take: 300,
+        }),
+        prisma.leaveApplication.findMany({
+          where: {
+            ...statusFilter(["pending", "partially_approved"]),
+            ...teamWhere,
+            ...leaveMonth,
+            leaveType: { name: { contains: "comp off", mode: "insensitive" } },
+          },
+          include: {
+            leaveType: true,
+            ...includeUser,
+            finalApprover: { select: { id: true, name: true } },
+          },
+          orderBy: { fromDate: "desc" },
+          take: 300,
+        }),
+      ]);
+      const spend = spendRows.map((r) => ({
+        ...r,
+        _kind: "leave_spend" as const,
+        // Reuse the earn columns: the date cell reads workedDate, details
+        // reads creditDays — map so the shared table renders both kinds.
+        workedDate: r.fromDate,
+        creditDays: Number(r.totalDays),
+      }));
+      const items = [...rows, ...spend]
+        .sort((a: any, b: any) => +new Date(b.workedDate) - +new Date(a.workedDate))
+        .slice(0, 300);
+      return NextResponse.json(serializeBigInt({ items, count: items.length }));
     }
 
     // Other tabs (leave_encashment, half_day, shift_weekly_off) don't have
