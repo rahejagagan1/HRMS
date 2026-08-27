@@ -99,9 +99,12 @@ export async function GET(req: NextRequest) {
       userClauses.length === 1 ? { user: userClauses[0] } :
       { user: { AND: userClauses } };
 
-    const [leaveCount, regCount, wfhCount, odCount, compOffCount] = await Promise.all([
+    const COMP_OFF_TYPE = { leaveType: { name: { contains: "comp off", mode: "insensitive" as const } } };
+    const [leaveCount, regCount, wfhCount, odCount, compOffCount, compOffSpendCount] = await Promise.all([
       prisma.leaveApplication.count({
-        where: { ...openTwoStage, ...teamWhere, ...leaveMonth },
+        // Comp-off SPEND applications are badged under Comp Offs, not Leave
+        // — mirrors the tab queries so badges match the visible rows.
+        where: { ...openTwoStage, ...teamWhere, ...leaveMonth, NOT: COMP_OFF_TYPE },
       }),
       // Regularization is HR-admin-only — managers don't see it in their
       // count at all. Final approvers see every open row. Brand scope
@@ -118,6 +121,9 @@ export async function GET(req: NextRequest) {
       prisma.compOffRequest.count({
         where: { ...openTwoStage, ...teamWhere, ...workedMonth },
       }),
+      prisma.leaveApplication.count({
+        where: { ...openTwoStage, ...teamWhere, ...leaveMonth, ...COMP_OFF_TYPE },
+      }),
     ]);
 
     const wfhTotal = wfhCount + odCount; // WFH / OD tab combines both.
@@ -126,13 +132,13 @@ export async function GET(req: NextRequest) {
       byTab: {
         leave:            leaveCount,
         leave_encashment: 0,
-        comp_off:         compOffCount,
+        comp_off:         compOffCount + compOffSpendCount,
         regularize:       regCount,
         wfh:              wfhTotal,
         half_day:         0,
         shift_weekly_off: 0,
       },
-      total: leaveCount + regCount + wfhTotal + compOffCount,
+      total: leaveCount + regCount + wfhTotal + compOffCount + compOffSpendCount,
     });
   } catch (e) { return serverError(e, "GET /api/hr/approvals/summary"); }
 }

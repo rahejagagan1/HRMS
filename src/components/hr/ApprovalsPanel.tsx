@@ -539,11 +539,24 @@ export default function ApprovalsPanel({
         });
       };
     } else if (tab === "comp_off") {
-      doOne = (id) => fetch(`/api/hr/leaves/comp-off`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ id, action, approvalNote: note || null }),
-      });
+      // Two row kinds share this tab: earn credits (CompOffRequest) act via
+      // the comp-off endpoint; SPEND rows are real leave applications and
+      // act via the leave decision route.
+      doOne = async (id) => {
+        const row = rows.find((r: any) => r.id === id);
+        if (row?._kind === "leave_spend") {
+          return fetch(`/api/hr/leaves/${id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ action, approvalNote: note || null }),
+          });
+        }
+        return fetch(`/api/hr/leaves/comp-off`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ id, action, approvalNote: note || null }),
+        });
+      };
     } else {
       // Tabs without an approve endpoint yet (half_day, etc.)
       setActioning(false);
@@ -781,7 +794,7 @@ export default function ApprovalsPanel({
                       // Regularization: single-stage HR-only — no L1/L2 split.
                       ? ["EMPLOYEE", "DATE", "REQUESTED IN / OUT", "REASON", "STATUS", "APPROVAL NOTE", "ACTIONS"]
                       // WFH / OD / Comp-off: two-stage L1 → L2.
-                      : ["EMPLOYEE", tab === "comp_off" ? "WORKED DATE" : "DATE", "DETAILS", "REASON", "L1 APPROVAL", ...(hideL2 ? [] : ["L2 APPROVAL"]), "REQUEST STATUS"]
+                      : ["EMPLOYEE", "DATE", "DETAILS", "REASON", "L1 APPROVAL", ...(hideL2 ? [] : ["L2 APPROVAL"]), "REQUEST STATUS"]
                     ).map((h) => (
                       <th key={h} className="px-3 py-2 text-left text-[10.5px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 whitespace-nowrap">{h}</th>
                     ))}
@@ -820,8 +833,10 @@ export default function ApprovalsPanel({
                         ? `On Duty${r.location ? ` @ ${r.location}` : ""}`
                       : tab === "wfh"
                         ? "Work From Home"
+                      : tab === "comp_off" && r._kind === "leave_spend"
+                        ? `Spend comp-off · ${r.creditDays ?? 1} day(s)`
                       : tab === "comp_off"
-                        ? `${r.creditDays ?? 1} day(s)`
+                        ? `Earn credit · ${r.creditDays ?? 1} day(s)`
                         : "—";
                     const reason = r.reason || r.purpose || "—";
                     const isTwoStage = tab === "wfh" || tab === "comp_off";
