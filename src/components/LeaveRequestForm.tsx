@@ -9,7 +9,7 @@ import { createPortal } from "react-dom";
 import { DatePicker } from "@/components/ui/date-picker";
 import EmployeePicker, { type PickerUser } from "@/components/hr/EmployeePicker";
 import HandoffSection from "@/components/hr/HandoffSection";
-import { leaveMinDate, leaveMinDateForType } from "@/lib/hr/leave-date-rules";
+import { leaveMinDate, leaveMinDateForType, canBackDateLeave, istTodayPlusIso } from "@/lib/hr/leave-date-rules";
 import { isWorkingDay, type ShiftWorkRule } from "@/lib/hr/shift-working-days";
 import { buildShortLeaveReason, isShortLeaveReason, shortLeaveSlot, type ShortLeaveSlot } from "@/lib/hr/short-leave";
 
@@ -233,9 +233,27 @@ export default function LeaveRequestForm({
     isFloaterType ? `/api/hr/admin/holidays?year=${today.slice(0, 4)}` : null,
     fetcher,
   );
+  // Regularization is the one kind whose whole point is a PAST date — the
+  // generic "no past dates" floor wrongly blocked yesterday (reported
+  // 2026-08-27: regularizing 26 Aug on 27 Aug was impossible from this
+  // form; the standalone RegularizeModal never had the clamp). Open the
+  // picker to the server's own window: today − 2 days while the org-wide
+  // window policy is enforced, unrestricted when it's off / unlimited is
+  // on / the caller is in the back-dating tier. The 2 mirrors
+  // REGULARIZATION_WINDOW_DAYS in the regularize API.
+  const { data: regWindowPolicy } = useSWR<{ enabled: boolean }>(
+    kind === "regularize" ? "/api/hr/policy/regularization-window" : null, fetcher,
+  );
+  const { data: regUnlimitedPolicy } = useSWR<{ enabled: boolean }>(
+    kind === "regularize" ? "/api/hr/policy/regularization-unlimited" : null, fetcher,
+  );
   const minDate = kind === "leave"
     ? leaveMinDateForType(me, selectedLeaveType?.code, { shortLeave: isShortLeave })
-    : leaveMinDate(me);
+    : kind === "regularize"
+      ? (canBackDateLeave(me) || regUnlimitedPolicy?.enabled === true || regWindowPolicy?.enabled === false
+          ? undefined
+          : istTodayPlusIso(-2))
+      : leaveMinDate(me);
   // Bookable floater dates: optional-type holidays, today onwards (the
   // back-dating tier, which has no minDate clamp, also sees past dates).
   const floaterDates: { date: string; name: string }[] = (Array.isArray(holidayRows) ? holidayRows : [])
@@ -251,10 +269,11 @@ export default function LeaveRequestForm({
   }, [isFloaterType]);
   // Keep the picked dates valid when the minimum moves — e.g. selecting
   // Casual Leave pushes the earliest date +2 days, so a previously-picked
-  // "today" would silently fail on submit. Apply-mode only: edit mode must
-  // never rewrite the filed dates behind the user's back.
+  // "today" would silently fail on submit. Apply-mode + LEAVE only: edit
+  // mode must never rewrite the filed dates behind the user's back, and a
+  // regularization's prefilled past date must never be bumped forward.
   useEffect(() => {
-    if (isEdit || !minDate) return;
+    if (isEdit || kind !== "leave" || !minDate) return;
     if (fromDate && fromDate < minDate) {
       setFromDate(minDate);
       if (!toDate || toDate < minDate) setToDate(minDate);
