@@ -48,7 +48,20 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         leaveBalances: { include: { leaveType: true } },
         leavePolicy: { select: { id: true, name: true, isActive: true } },
         heldAssets: { where: { returnedAt: null }, include: { asset: true } },
-        ownedDocuments: true,
+        // Metadata ONLY — never `true`, which makes Prisma select the
+        // `fileBlob` bytea for every attachment. That pulled megabytes of
+        // raw PDF/image bytes into this JSON on every call (3.3 MB for a
+        // typical employee, 16.4 MB for the heaviest; ~295 MB org-wide) and
+        // was the reason the template editor's employee auto-fill took
+        // seconds. Nothing reads the bytes from here — the UI uses
+        // `fileUrl` (/api/hr/documents/:id/file) to stream a file on demand.
+        ownedDocuments: {
+          select: {
+            id: true, category: true, fileName: true, fileUrl: true,
+            fileMime: true, isVerified: true, expiryDate: true,
+            uploadedById: true, createdAt: true,
+          },
+        },
       },
     });
     if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
