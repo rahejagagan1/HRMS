@@ -34,7 +34,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         userShift: { include: { shift: true } },
         leaveBalances: { include: { leaveType: true } },
         heldAssets: { where: { returnedAt: null }, include: { asset: true } },
-        ownedDocuments: true,
+        // Metadata only — `true` would select the fileBlob bytea for every
+        // attachment and ship megabytes of raw file bytes in this JSON
+        // (same fix as /api/hr/people/:id). Files stream via `fileUrl`.
+        ownedDocuments: {
+          select: {
+            id: true, category: true, fileName: true, fileUrl: true,
+            fileMime: true, isVerified: true, expiryDate: true,
+            uploadedById: true, createdAt: true,
+          },
+        },
       },
     });
     if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
