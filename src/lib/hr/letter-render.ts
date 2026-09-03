@@ -816,6 +816,16 @@ export async function wrapLetterPreviewHtml(
   const watermarkImg = chrome.logoDataUrl
     ? `<img class="lh-watermark" src="${chrome.logoDataUrl}" alt="" aria-hidden="true" />`
     : "";
+  // The `<!--email_off-->` fence around <body> is Cloudflare's documented
+  // opt-out from Email Address Obfuscation (Scrape Shield). Production sits
+  // behind Cloudflare, which rewrites every address in a `text/html`
+  // response into `<a class="__cf_email__">[email protected]</a>` and
+  // relies on an injected script to decode it back. That script can never
+  // run here — the CSP on this document is `default-src 'none'` — so the
+  // letterhead's HRD@ address (and any address inside a template body)
+  // rendered literally as "[email protected]" on the letter. Server-side
+  // PDF rendering never touched Cloudflare, so only the HTML responses
+  // were affected. The fence is an inert comment everywhere else.
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -995,6 +1005,7 @@ export async function wrapLetterPreviewHtml(
   </style>
 </head>
 <body>
+  <!--email_off-->
   <div class="page">
     ${watermarkImg}
     <div class="letterhead">
@@ -1007,6 +1018,7 @@ export async function wrapLetterPreviewHtml(
     <h1 class="letter-title">${escapeHtml(title)}</h1>
     ${bodyHtml}
   </div>
+  <!--email_on-->
 </body>
 </html>`;
 }

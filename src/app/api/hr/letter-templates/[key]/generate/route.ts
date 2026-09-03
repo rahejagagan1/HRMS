@@ -152,16 +152,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
     // the preview. Chrome handles all of it natively.
     const fullHtml = await wrapLetterPreviewHtml(html, tpl.title, tpl.businessUnit);
     let pdfBytes: Buffer | null = null;
+    let pdfError: string | null = null;
     try {
       pdfBytes = await htmlToPdf(fullHtml);
     } catch (e) {
-      console.warn("[letter generate] HTML→PDF (Chromium) failed:", (e as any)?.message);
+      pdfError = String((e as any)?.message ?? e);
+      console.warn("[letter generate] HTML→PDF (Chromium) failed:", pdfError);
     }
 
     if (!pdfBytes) {
-      // Dev fallback (LibreOffice missing on local machines) —
-      // serve the substituted HTML so HR can preview / browser-
-      // print. Production always hits the PDF path.
+      // Fallback when no Chromium is reachable (see html-to-pdf.ts) —
+      // serve the substituted HTML so HR can browser-print rather than
+      // being left with nothing.
+      //
+      // NOTE two real consequences of taking this path, both surfaced to
+      // the caller via X-PDF-Fallback-Reason so the UI can say something
+      // truthful instead of guessing:
+      //   • the letter is NOT persisted — the EmployeeDocument /
+      //     PendingDocument write below only runs on the PDF path, so
+      //     nothing lands in the recipient's Documents tab
+      //   • the response is text/html, which means Cloudflare's Email
+      //     Address Obfuscation rewrites every address in it to
+      //     "[email protected]". The wrapper brackets the document in
+      //     <!--email_off--> to opt out; without that the letterhead
+      //     address is mangled in the downloaded file.
       //
       // SECURITY: stream through the same hardened preview envelope
       // (CSP default-src 'none' + img-src data: + style-src
@@ -174,6 +188,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
       return new NextResponse(fullHtml, {
         headers: {
           "Content-Type":             "text/html; charset=utf-8",
+          "X-PDF-Fallback-Reason":    (pdfError ?? "unknown").replace(/[\r\n]+/g, " ").slice(0, 300),
           "Content-Security-Policy":  "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
           "X-Content-Type-Options":   "nosniff",
           "X-Frame-Options":          "DENY",

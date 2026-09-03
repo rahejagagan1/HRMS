@@ -62,7 +62,24 @@ function findChromePath(): string | null {
 }
 
 async function getBrowser(): Promise<Browser> {
-  if (browserPromise) return browserPromise;
+  // A cached promise is only reusable while it points at a LIVE browser.
+  // Two ways the old unconditional cache went permanently bad:
+  //   • the very first launch rejected (Chromium missing, transient EACCES)
+  //     — the rejected promise stayed cached, so every later request threw
+  //     the same stale error and the letter route fell back to HTML forever
+  //   • the browser died later (OOM kill, `pkill chrome`, VPS deploy) —
+  //     newPage() then threw on a disconnected instance
+  // Either way the only cure was restarting Node. Now a bad browser is
+  // dropped so the next call retries from scratch.
+  if (browserPromise) {
+    try {
+      const existing = await browserPromise;
+      if (existing.connected) return existing;
+    } catch {
+      /* fall through to a fresh launch */
+    }
+    browserPromise = null;
+  }
   const executablePath = findChromePath();
   if (!executablePath) {
     throw new Error(
@@ -85,8 +102,20 @@ async function getBrowser(): Promise<Browser> {
       "--disable-gpu",
     ],
   };
-  browserPromise = puppeteer.launch(opts);
-  return browserPromise;
+  const launching = puppeteer.launch(opts).then((browser) => {
+    // Drop the cache the moment Chromium goes away, so the next caller
+    // launches a fresh one instead of reusing a corpse.
+    browser.once("disconnected", () => {
+      if (browserPromise === launching) browserPromise = null;
+    });
+    return browser;
+  });
+  browserPromise = launching;
+  // Don't leave a rejected promise parked in the cache.
+  launching.catch(() => {
+    if (browserPromise === launching) browserPromise = null;
+  });
+  return launching;
 }
 
 export async function htmlToPdf(html: string): Promise<Buffer> {

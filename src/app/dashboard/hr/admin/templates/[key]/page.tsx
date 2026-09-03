@@ -540,7 +540,7 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
       }
       // Server may return either PDF bytes (the production path —
       // also auto-saved to the employee's Documents) OR HTML when
-      // the LibreOffice converter is unavailable. Use the response
+      // no Chromium is reachable to render it. Use the response
       // Content-Type to decide how to deliver to the user. Always
       // trigger a programmatic <a download> click — popup blockers
       // shoot down window.open() since it fires AFTER the network
@@ -571,9 +571,17 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
       if (mode === "manual" && isPdf) {
         alert(`Saved. This document is parked for ${manualFields.email} and will auto-attach to their Documents once they're added to the system.`);
       } else if (!isPdf) {
+        // The server couldn't reach a Chromium to render the PDF, so it
+        // sent print-ready HTML instead. Say so plainly — and warn that
+        // this copy was NOT filed, because the route only persists on
+        // the PDF path.
+        const why = res.headers.get("X-PDF-Fallback-Reason");
         alert(
-          "LibreOffice isn't available on the server, so a print-ready HTML was downloaded instead. " +
-          "Open the file and use the browser's Print → Save as PDF to convert it.",
+          "The server has no Chromium available, so a print-ready HTML was downloaded instead of a PDF.\n\n" +
+          "This copy was NOT saved to the recipient's Documents — only generated PDFs are filed. " +
+          "Open the file and use the browser's Print → Save as PDF, or install Chromium on the server " +
+          "(sudo apt-get install -y chromium-browser) and generate again." +
+          (why ? `\n\nServer reported: ${why}` : ""),
         );
       }
     } catch (e: any) {
