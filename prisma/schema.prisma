@@ -2506,6 +2506,14 @@ model EmployeeExit {
   // past employees who could re-join (e.g. via the onboard wizard).
   okToRehire Boolean @default(false)
 
+  /// Set when a past employee is REHIRED — the new joining date. While this
+  /// is null the exit is final and every "has this person left?" check
+  /// (attendance board, log synthesis, payroll) treats lastWorkingDay as the
+  /// end of their record. Once set (and on/before today) the person counts as
+  /// employed again FROM this date, while the exit row itself is kept so the
+  /// previous stint's F&F, notes, tasks and survey survive.
+  rehiredAt DateTime? @db.Date
+
   initiatedById Int?
   initiatedBy   User? @relation("ExitInitiator", fields: [initiatedById], references: [id], onDelete: SetNull)
 

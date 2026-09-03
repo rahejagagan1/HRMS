@@ -360,6 +360,20 @@ export function EmployeeTimePanel({
   // API) — drives the weekly-off vs absent synthesis below. Null → Mon–Fri.
   const panelShift = (data?.shift ?? null) as any;
   const panelAnchor = data?.shiftEffectiveFrom ? new Date(data.shiftEffectiveFrom) : null;
+  // A REHIRED employee's record restarts at their rejoin date: the days
+  // between the old last working day and coming back aren't absences, they
+  // are time the person simply wasn't employed. Whichever of joining date /
+  // rehire date is LATER floors the synthesized day series, so the gap
+  // renders as nothing at all rather than a wall of "Absent".
+  const rehiredAtDate = (data as any)?.rehiredAt
+    ? new Date(`${String((data as any).rehiredAt).slice(0, 10)}T00:00:00Z`)
+    : null;
+  // Floor for the synthesized day series. Can't fold this into `joinedAt`
+  // above — that one builds the fetch URL and must exist before the
+  // response that carries rehiredAt.
+  const seriesStart = rehiredAtDate && (!joinedAt || rehiredAtDate.getTime() > joinedAt.getTime())
+    ? rehiredAtDate
+    : joinedAt;
   const records: any[] = data?.records ?? [];
 
   // On-behalf clock-out (Gagan's developer account only — see viewerIsGaganDev
@@ -467,7 +481,7 @@ export function EmployeeTimePanel({
       const todayUtc = new Date(`${today.toISOString().slice(0, 10)}T00:00:00Z`);
       if (end.getTime() > todayUtc.getTime()) end = todayUtc;
     }
-    if (joinedAt && start.getTime() < joinedAt.getTime()) start = new Date(joinedAt.getTime());
+    if (seriesStart && start.getTime() < seriesStart.getTime()) start = new Date(seriesStart.getTime());
     // If the entire window is pre-joining, bail out with an empty series.
     if (start.getTime() > end.getTime()) return [] as any[];
     const byDate = new Map<string, any>();

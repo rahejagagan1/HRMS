@@ -31,8 +31,16 @@ export async function GET() {
     });
     // Exclude anyone whose last working day has passed — they've exited and
     // fall off the attendance board (their account stays for payslip access).
+    // A REHIRED person keeps their exit row (it owns the previous stint's
+    // F&F, notes and survey), so "left the company" must also require that
+    // they haven't come back: no rehire date, or one still in the future.
+    // Without this a rehire stayed invisible on the board while happily
+    // clocking in — the exact state Mihika Mittal was left in.
     const exitedRows = await prisma.employeeExit.findMany({
-      where: { lastWorkingDay: { lt: today } },
+      where: {
+        lastWorkingDay: { lt: today },
+        OR: [{ rehiredAt: null }, { rehiredAt: { gt: today } }],
+      },
       select: { userId: true },
     });
     const exitedIds = new Set(exitedRows.map((e) => e.userId));
