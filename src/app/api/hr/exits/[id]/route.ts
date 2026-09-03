@@ -52,7 +52,7 @@ type ExitDetail = {
   reason: string | null; notes: string | null;
   assetsReturned: boolean; documentsHandled: boolean;
   finalSettlementDone: boolean; exitInterviewDone: boolean;
-  okToRehire: boolean; createdAt: Date;
+  okToRehire: boolean; rehiredAt: Date | null; createdAt: Date;
   userName: string; userEmail: string;
   designation: string | null; department: string | null;
   managerName: string | null;
@@ -81,7 +81,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
               e.reason, e.notes,
               e."assetsReturned", e."documentsHandled",
               e."finalSettlementDone", e."exitInterviewDone",
-              e."okToRehire", e."createdAt",
+              e."okToRehire", e."rehiredAt", e."createdAt",
               u.name AS "userName", u.email AS "userEmail",
               ep.designation, ep.department,
               m.name AS "managerName"
@@ -175,6 +175,31 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const args: any[] = [];
     let i = 1;
     let resolvedStatus: string | null = null;
+    // ── Rehire ────────────────────────────────────────────────────────
+    // A past employee returning. We deliberately KEEP the exit row (its
+    // F&F settlement, notes, tasks and survey are children with ON DELETE
+    // CASCADE, so deleting it would destroy that history) and instead
+    // stamp the new joining date. Everything that asks "has this person
+    // left?" — attendance board, attendance-log synthesis, payroll — reads
+    // rehiredAt and treats them as employed again from that date.
+    // `null` clears a rehire, putting the exit back to final.
+    let rehireDate: Date | null | undefined;
+    if (body.rehiredAt !== undefined) {
+      if (body.rehiredAt === null) {
+        rehireDate = null;
+      } else {
+        const raw = String(body.rehiredAt);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+          return NextResponse.json({ error: "Invalid rehiredAt (expected YYYY-MM-DD)" }, { status: 400 });
+        }
+        rehireDate = new Date(`${raw}T00:00:00.000Z`);
+        if (Number.isNaN(rehireDate.getTime())) {
+          return NextResponse.json({ error: "Invalid rehiredAt" }, { status: 400 });
+        }
+      }
+      sets.push(`"rehiredAt" = $${i++}`);
+      args.push(rehireDate);
+    }
     if (body.status !== undefined) {
       resolvedStatus = normaliseStatus(body.status);
       if (!resolvedStatus) {
@@ -237,12 +262,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // "exited" do we deactivate the account. Flipping back to an
     // earlier status reactivates them. Done in one transaction so the
     // exit row and the user flag never get out of sync.
+    const ops_pre: any[] = [];
     const ops: any[] = [
       prisma.$executeRawUnsafe(
         `UPDATE "EmployeeExit" SET ${sets.join(", ")} WHERE id = $${i}`,
         ...args,
       ),
     ];
+    // Stamping a rehire reactivates the account on its own — HR shouldn't
+    // have to also walk the status back to In Progress (the two-step dance
+    // that left Mihika Mittal active but invisible on the attendance board).
+    if (rehireDate !== undefined) {
+      ops_pre.push(prisma.$executeRawUnsafe(
+        `UPDATE "User" SET "isActive" = $1 WHERE id = (SELECT "userId" FROM "EmployeeExit" WHERE id = $2)`,
+        rehireDate !== null, id,
+      ));
+    }
     if (resolvedStatus !== null) {
       const shouldDeactivate = resolvedStatus === "exited";
       ops.push(prisma.$executeRawUnsafe(
@@ -276,6 +311,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         ));
       }
     }
+    ops.push(...ops_pre);
     await prisma.$transaction(ops);
 
     return NextResponse.json({ ok: true });

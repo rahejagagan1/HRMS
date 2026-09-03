@@ -79,10 +79,25 @@ export async function POST(req: NextRequest) {
     // Exited/offboarded employees (isActive=false) who still worked part of
     // this run month must be paid too. Pull their last working day so we can
     // (a) include them despite isActive=false and (b) prorate up to the LWD.
-    const exitRows = await prisma.$queryRawUnsafe<{ userId: number; lastWorkingDay: Date }[]>(
-      `SELECT "userId", "lastWorkingDay" FROM "EmployeeExit" WHERE "lastWorkingDay" IS NOT NULL`,
+    const exitRows = await prisma.$queryRawUnsafe<{ userId: number; lastWorkingDay: Date; rehiredAt: Date | null }[]>(
+      // A REHIRED person is employed again, so their old lastWorkingDay must
+      // stop capping anything: it would otherwise cut their paid days at the
+      // date of the PREVIOUS stint. Rows whose rehire date has arrived are
+      // dropped from the exit map entirely; `rehiredAt` is carried separately
+      // so a mid-month rejoin can floor the paid window (below).
+      `SELECT "userId", "lastWorkingDay", "rehiredAt" FROM "EmployeeExit" WHERE "lastWorkingDay" IS NOT NULL`,
     );
-    const exitLwdByUser = new Map<number, Date>(exitRows.map(r => [r.userId, new Date(r.lastWorkingDay)]));
+    const exitLwdByUser = new Map<number, Date>(
+      exitRows
+        .filter(r => !r.rehiredAt || new Date(r.rehiredAt).getTime() > lastDay.getTime())
+        .map(r => [r.userId, new Date(r.lastWorkingDay)]),
+    );
+    // Rejoin date, when it lands on/before the end of the run month.
+    const rehiredByUser = new Map<number, Date>(
+      exitRows
+        .filter(r => r.rehiredAt && new Date(r.rehiredAt).getTime() <= lastDay.getTime())
+        .map(r => [r.userId, new Date(r.rehiredAt!)]),
+    );
 
     // Brand scope: when "NB Media" / "YT Labs" is passed (the Run Payroll brand
     // dropdown), only that brand's employees are processed — so each brand's
@@ -362,7 +377,14 @@ export async function POST(req: NextRequest) {
       // at UTC midnight; joined after the run month → nothing earned, skip.
       const doj = (s.user as any).employeeProfile?.joiningDate as Date | null ?? null;
       if (doj && doj.getTime() > lastDay.getTime()) { skipped += 1; continue; }
-      const preJoinDays = (doj && doj.getTime() > firstDay.getTime()) ? doj.getUTCDate() - 1 : 0;
+      // Someone REHIRED part-way through the month is only paid from their
+      // rejoin date — days before it belong to the gap, not to this stint.
+      // Treated exactly like a mid-month joiner: whichever of joining date /
+      // rehire date is later sets the floor.
+      const rejoin = rehiredByUser.get(s.userId) ?? null;
+      const windowStart = rejoin && (!doj || rejoin.getTime() > doj.getTime()) ? rejoin : doj;
+      if (windowStart && windowStart.getTime() > lastDay.getTime()) { skipped += 1; continue; }
+      const preJoinDays = (windowStart && windowStart.getTime() > firstDay.getTime()) ? windowStart.getUTCDate() - 1 : 0;
       const paidDays   = Math.max(0, ceiling - preJoinDays - lopDays);
       const lopFactor  = paidDays / daysInMonth;
 

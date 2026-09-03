@@ -64,6 +64,15 @@ export async function GET(req: NextRequest) {
     ).catch(() => [] as any[]);
     const dayShift = dayShiftRows[0] ?? null;
 
+    // Rehire date, when this person previously left and came back. The log
+    // clamps its synthesized rows to it so the gap between the old last
+    // working day and the rejoin doesn't render as a wall of "Absent".
+    const rehireRow = await prisma.$queryRawUnsafe<Array<{ rehiredAt: Date | null }>>(
+      `SELECT "rehiredAt" FROM "EmployeeExit" WHERE "userId" = $1 LIMIT 1`,
+      targetUserId,
+    ).catch(() => [] as Array<{ rehiredAt: Date | null }>);
+    const rehiredAt = rehireRow[0]?.rehiredAt ?? null;
+
     const records = await prisma.attendance.findMany({
       where: { userId: targetUserId, date: { gte: fromDate, lte: toDate } },
       orderBy: { date: "asc" },
@@ -288,6 +297,9 @@ export async function GET(req: NextRequest) {
         createdAt: usRow.shiftCreatedAt,
       } : null,
       shiftEffectiveFrom: usRow?.effectiveFrom ?? null,
+      // Non-null only for a rehired employee — the client clamps the day
+      // series to it so pre-rejoin days aren't synthesized as absences.
+      rehiredAt,
     });
   } catch (e) {
     return serverError(e, "GET /api/hr/attendance");

@@ -36,7 +36,7 @@ type ExitDetail = {
     reason: string | null; notes: string | null;
     assetsReturned: boolean; documentsHandled: boolean;
     finalSettlementDone: boolean; exitInterviewDone: boolean;
-    okToRehire: boolean; createdAt: string;
+    okToRehire: boolean; rehiredAt: string | null; createdAt: string;
     userName: string; userEmail: string;
     designation: string | null; department: string | null;
     managerName: string | null;
@@ -243,6 +243,31 @@ function SummaryTab({
     });
     onChanged();
   };
+  // Rehire — records the new joining date and switches the account back on
+  // in one call. The exit row is deliberately KEPT (its F&F settlement,
+  // notes, tasks and survey hang off it), so the previous stint's history
+  // survives; `rehiredAt` is what every "has this person left?" check reads.
+  const [rehireOpen, setRehireOpen] = useState(false);
+  const [rehireDate, setRehireDate] = useState("");
+  const [rehireBusy, setRehireBusy] = useState(false);
+  const submitRehire = async () => {
+    if (!rehireDate) return;
+    setRehireBusy(true);
+    try {
+      const res = await fetch(`/api/hr/exits/${e.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rehiredAt: rehireDate }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        alert(d?.error || "Could not record the rehire.");
+        return;
+      }
+      setRehireOpen(false);
+      onChanged();
+    } finally { setRehireBusy(false); }
+  };
+
   const setClearance = async (key: string, value: boolean) => {
     await fetch(`/api/hr/exits/${e.id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -546,12 +571,57 @@ function SummaryTab({
               );
             })}
           </div>
-          {e.status === "exited" && (
+          {e.status === "exited" && !e.rehiredAt && (
             <p className="mt-3 flex items-start gap-1.5 text-[11.5px] text-amber-700">
               <AlertCircle size={13} className="mt-0.5 shrink-0" />
               Marking as exited deactivates the user account. Move back to In Progress to reactivate.
             </p>
           )}
+
+          {/* ── Rehire ──────────────────────────────────────────────────
+              For a past employee coming back. Recording the rejoin date
+              reactivates the account AND restarts attendance from that
+              date — the exit record itself is kept, so the previous
+              stint's settlement, notes and survey aren't lost. */}
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            {rehireOpen ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+                <p className="text-[12px] font-semibold text-slate-800">Rehire {e.userName}</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  Comes back as a normal employee: account reactivated, joining date set to this day, leave balances
+                  restarted for the year, and this exit record cleared so they can be exited again in future.
+                </p>
+                <div className="mt-3 flex items-end gap-2">
+                  <div>
+                    <label className="block text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">New joining date</label>
+                    <input
+                      type="date"
+                      value={rehireDate}
+                      onChange={(ev) => setRehireDate(ev.target.value)}
+                      className="mt-1 h-9 rounded-md border border-slate-300 bg-white px-2.5 text-[12.5px] text-slate-800 focus:border-[#0f6ecd] focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    onClick={submitRehire}
+                    disabled={!rehireDate || rehireBusy}
+                    className="h-9 rounded-md bg-emerald-500 px-4 text-[12.5px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                  >{rehireBusy ? "Saving…" : "Confirm rehire"}</button>
+                  <button
+                    onClick={() => setRehireOpen(false)}
+                    disabled={rehireBusy}
+                    className="h-9 rounded-md border border-slate-300 bg-white px-3 text-[12.5px] font-semibold text-slate-600 hover:bg-slate-50"
+                  >Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => { setRehireDate(""); setRehireOpen(true); }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-white px-3.5 py-2 text-[12.5px] font-semibold text-emerald-700 transition hover:bg-emerald-50"
+              >
+                <ArrowRight size={13} /> Rehire this employee
+              </button>
+            )}
+          </div>
         </div>
       </section>
 
