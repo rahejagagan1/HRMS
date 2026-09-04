@@ -360,6 +360,13 @@ export function EmployeeTimePanel({
   // API) — drives the weekly-off vs absent synthesis below. Null → Mon–Fri.
   const panelShift = (data?.shift ?? null) as any;
   const panelAnchor = data?.shiftEffectiveFrom ? new Date(data.shiftEffectiveFrom) : null;
+  // A shift assignment governs only dates ON/AFTER its effectiveFrom
+  // (2026-09-03: applying a new YT shift re-tinted August's logs — W-Off
+  // patterns, LATE chips — with rules that weren't in force then). Days
+  // before the boundary keep their stored verdicts and fall back to the
+  // legacy Mon–Fri calendar; no current-shift judgement is applied to them.
+  const shiftEffIso: string | null = data?.shiftEffectiveFrom ? String(data.shiftEffectiveFrom).slice(0, 10) : null;
+  const shiftGovernsDate = (iso: string) => !shiftEffIso || iso >= shiftEffIso;
   // A REHIRED employee's record restarts at their rejoin date: the days
   // between the old last working day and coming back aren't absences, they
   // are time the person simply wasn't employed. Whichever of joining date /
@@ -494,7 +501,12 @@ export function EmployeeTimePanel({
       else {
         // Off day for THIS employee's shift — weekly-off OR a non-working
         // alternate Saturday. Working Saturdays correctly stay "absent".
-        const isWeekend = !isWorkingDay(d, panelShift, panelAnchor);
+        // Days BEFORE the shift's effectiveFrom aren't judged by it — the
+        // then-current shift is gone (single UserShift row), so those days
+        // use the plain Mon–Fri weekend rule instead of today's calendar.
+        const isWeekend = shiftGovernsDate(iso)
+          ? !isWorkingDay(d, panelShift, panelAnchor)
+          : (d.getUTCDay() === 0 || d.getUTCDay() === 6);
         // CEO + developers — only synthesize weekends (calendar context).
         // Drop the "Absent" placeholders so the log isn't a wall of
         // cross-marks for someone who doesn't punch a clock.
@@ -1364,7 +1376,11 @@ export function EmployeeTimePanel({
                           ? <span title="Missed clock-out — payroll charges ½ day unless the day is regularized, waived, or covered by an approved request" className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"><AlertCircle size={10} strokeWidth={2.5} /> Missed · ½ day</span>
                           : <span className="inline-flex items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">Missed</span>
                       ) : null}
-                      {isLateFirstIn && !!rec.clockIn && !rec.isRegularized && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
+                      {/* LATE is judged by the CURRENT shift's cutoff, so it
+                          only renders for dates the current assignment
+                          governs — a day lived under an earlier shift must
+                          not be re-flagged by today's timings. */}
+                      {isLateFirstIn && shiftGovernsDate(dateOnly) && !!rec.clockIn && !rec.isRegularized && !isLeaveRow ? <span className="inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-orange-700">Late</span> : null}
                       {isOnBreak ? <span className="inline-flex items-center rounded bg-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">On break</span> : null}
                     </div>
                     {/* Split-day summary so HR + the employee can see BOTH halves
