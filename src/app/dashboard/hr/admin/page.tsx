@@ -923,6 +923,25 @@ export default function HRAdminPage() {
                         className="flex items-center gap-1 h-7 px-3 bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 text-slate-600 dark:text-slate-300 rounded-lg text-[11px] font-medium">
                         <Pencil className="w-3 h-3" />Edit
                       </button>
+                      {/* Delete — the API refuses (409, message names the
+                          count) while anyone is assigned, so a template in
+                          use can't be removed by accident. */}
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Delete shift template "${s.name}"?
+
+This only removes the template - past attendance keeps its stored verdicts. If employees are assigned, deletion is blocked until they're moved to another shift.`)) return;
+                          const res = await fetch(`/api/hr/admin/shifts/${s.id}`, { method: "DELETE" });
+                          if (!res.ok) {
+                            const j = await res.json().catch(() => ({}));
+                            alert(j?.error || "Couldn't delete the shift.");
+                            return;
+                          }
+                          mutate(`/api/hr/admin/shifts${shiftsBrandParam}`);
+                        }}
+                        className="flex items-center gap-1 h-7 px-3 bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-[11px] font-medium">
+                        <Trash2 className="w-3 h-3" />Delete
+                      </button>
                     </div>
                   </div>
                 ))}
