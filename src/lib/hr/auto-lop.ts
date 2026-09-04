@@ -168,6 +168,14 @@ export async function runAutoLOP(): Promise<AutoLOPSummary> {
       // → skip (unchanged: a user with no shift is never auto-LOP'd).
       const sr = shiftByUser.get(u.id);
       if (!sr || !Array.isArray(sr.workDays)) continue;
+
+      // The assignment governs only dates ≥ its effectiveFrom. A date lived
+      // under an earlier (since-overwritten) shift is skipped the same way a
+      // no-shift user is — never judged by rules that weren't in force then.
+      if (sr.effectiveFrom) {
+        const eff = new Date(sr.effectiveFrom);
+        if (Date.UTC(eff.getUTCFullYear(), eff.getUTCMonth(), eff.getUTCDate()) > date.getTime()) continue;
+      }
       // Alternate-Saturday phase is anchored on the SHIFT (createdAt) so it's
       // uniform for everyone on the shift — a mid-cycle joiner no longer gets
       // the opposite Saturdays. effectiveFrom stays as a fallback only.

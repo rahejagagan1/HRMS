@@ -11,8 +11,12 @@ type Params = Promise<{ id: string }>;
 // Body: { scope: "all" | "nb_media" | "yt_labs" | "specific", userIds?: number[], effectiveFrom?: string }
 //
 // Assigns this shift to a set of active employees by upserting their single
-// UserShift row (userId is @unique → re-applying reassigns). Only affects
-// FUTURE working-day decisions; no past attendance is recomputed.
+// UserShift row (userId is @unique → re-applying reassigns). The assignment
+// governs only dates ≥ effectiveFrom: the attendance log UI, the on-read
+// status re-derivation, auto-LOP and the payroll pricing engine all treat
+// earlier dates as NOT governed by this shift (stored verdicts stand,
+// legacy Mon–Fri/9h defaults apply where a rule is needed) — so applying a
+// new shift never re-tints or re-prices past attendance (2026-09-03).
 export async function POST(req: NextRequest, { params }: { params: Params }) {
   const { session, errorResponse } = await requireAuth();
   if (errorResponse) return errorResponse;

@@ -89,10 +89,23 @@ export async function shiftContextForUsers(userIds: number[]): Promise<Map<numbe
   return new Map(rows.map((r) => [r.userId, r]));
 }
 
+/** A shift assignment governs only dates ON/AFTER its effectiveFrom. Days
+ *  before it were lived under a different (since-overwritten) shift, so
+ *  current-shift rules must not re-judge them — they fall back to the
+ *  legacy defaults, and stored verdicts stand (2026-09-03: a YT shift
+ *  change re-priced August under the new calendar). */
+export function shiftIfGoverns(date: Date, shift: ShiftCtx | undefined): ShiftCtx | undefined {
+  if (!shift?.effectiveFrom) return shift;
+  const eff = new Date(shift.effectiveFrom);
+  const effDay = Date.UTC(eff.getUTCFullYear(), eff.getUTCMonth(), eff.getUTCDate());
+  return date.getTime() < effDay ? undefined : shift;
+}
+
 /** Shift-aware working-day test with the same legacy fallback payroll always
  *  used (Mon–Fri) for users with no shift. Exported so the unpaid-leave loops
  *  in generate + attendance-summary count LWP days off the SAME calendar. */
-export function isPayrollWorkingDay(date: Date, shift: ShiftCtx | undefined): boolean {
+export function isPayrollWorkingDay(date: Date, shiftIn: ShiftCtx | undefined): boolean {
+  const shift = shiftIfGoverns(date, shiftIn);
   if (!shift) {
     const dow = date.getUTCDay();
     return dow !== 0 && dow !== 6;
@@ -181,7 +194,8 @@ export async function priceMissedSwipes(opts: {
   const out: MissedSwipeCharge[] = [];
   for (const r of rows) {
     const key = ymd(r.date);
-    const shift = shifts.get(r.userId);
+    // Only the shift in force ON that date judges it (legacy bars otherwise).
+    const shift = shiftIfGoverns(r.date, shifts.get(r.userId));
     const worked = r.totalMinutes ?? 0;
     const bars = dayBars(r.date, shift ?? null);
     const base = { attendanceId: r.id, userId: r.userId, date: key, totalMinutes: worked };

@@ -57,12 +57,19 @@ export async function GET(req: NextRequest) {
     // The viewer's shift (with the sat* columns day-rules needs) so status is
     // re-derived against the SHIFT's own full/half bars (Saturday-aware) — never
     // a hardcoded 9h/4.5h. Raw SQL so a stale generated client can't hide sat*.
-    const dayShiftRows = await prisma.$queryRawUnsafe<Array<{ startTime: string | null; endTime: string | null; breakMinutes: number | null; satStartTime: string | null; satEndTime: string | null; satGraceMinutes: number | null }>>(
-      `SELECT s."startTime", s."endTime", s."breakMinutes", s."satStartTime", s."satEndTime", s."satGraceMinutes"
+    const dayShiftRows = await prisma.$queryRawUnsafe<Array<{ startTime: string | null; endTime: string | null; breakMinutes: number | null; satStartTime: string | null; satEndTime: string | null; satGraceMinutes: number | null; effectiveFrom: Date | null }>>(
+      `SELECT s."startTime", s."endTime", s."breakMinutes", s."satStartTime", s."satEndTime", s."satGraceMinutes", us."effectiveFrom"
          FROM "UserShift" us JOIN "Shift" s ON s.id = us."shiftId" WHERE us."userId" = $1`,
       targetUserId,
     ).catch(() => [] as any[]);
     const dayShift = dayShiftRows[0] ?? null;
+    // The assignment governs only dates ≥ its effectiveFrom — earlier days
+    // were lived under a different (overwritten) shift, so their STORED
+    // status must stand rather than being re-derived with today's bars
+    // (2026-09-03: a YT shift change re-scored August rows on read).
+    const shiftEffIso: string | null = dayShift?.effectiveFrom
+      ? new Date(dayShift.effectiveFrom).toISOString().slice(0, 10)
+      : null;
 
     // Rehire date, when this person previously left and came back. The log
     // clamps its synthesized rows to it so the gap between the old last
@@ -142,6 +149,12 @@ export async function GET(req: NextRequest) {
         secs += Math.max(0, Math.floor((s.clockOut.getTime() - s.clockIn.getTime()) / 1000));
       }
       const totalMinutes = Math.floor(secs / 60);
+      // Pre-effectiveFrom days: re-summed minutes are pure arithmetic and
+      // stay, but the status was decided by the shift in force THEN — keep
+      // it instead of re-judging with the current shift's bars.
+      if (shiftEffIso && new Date(recDate).toISOString().slice(0, 10) < shiftEffIso) {
+        return { totalMinutes, status: existingStatus };
+      }
       // Status is derived only for clock-based statuses. Leave (on_leave,
       // weekly_off, holiday, absent) statuses are preserved — those aren't
       // about how much was worked.
