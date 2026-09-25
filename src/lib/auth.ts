@@ -254,14 +254,23 @@ export const authOptions: NextAuthOptions = {
                     if (new Date(lwd).getTime() < t.getTime()) return false; // exit date passed
                 }
             }
-            // Update profile picture on login (by id — the stored email may be
-            // cased differently than what Google sent).
+            // Update profile on login (by id — the stored email may be
+            // cased differently than what Google sent). The Google photo is
+            // only used to FILL an empty profilePictureUrl, never to
+            // overwrite one: Google serves a grey slashed-person placeholder
+            // for accounts whose photo was removed (Suraj, 2026-09-24), and
+            // unconditional copying both showed that placeholder in the app
+            // and clobbered any photo the person uploaded here.
             try {
+                const cur = await prisma.user.findUnique({
+                    where: { id: existingUser.id },
+                    select: { profilePictureUrl: true },
+                });
                 await prisma.user.update({
                     where: { id: existingUser.id },
                     data: {
                         name: user.name || undefined,
-                        profilePictureUrl: user.image || undefined,
+                        profilePictureUrl: cur?.profilePictureUrl ? undefined : (user.image || undefined),
                     },
                 });
             } catch (e) {

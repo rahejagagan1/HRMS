@@ -227,6 +227,10 @@ export default function ProfilePage() {
     return { label: "NOT IN YET", cls: "bg-red-500/10 text-red-500 border-red-200 dark:border-red-500/20" };
   })();
   const [tab, setTab] = useState<ProfileTab>("ABOUT");
+  // Google-hosted photos (lh3) fail intermittently (rate limits, privacy
+  // blockers) even with no-referrer set - without a fallback the browser
+  // paints its broken-image glyph inside the avatar circle.
+  const [avatarBroken, setAvatarBroken] = useState(false);
 
   // Deep-link support: "Me → My Space → Documents" links here with
   // ?tab=DOCUMENTS so it opens straight on the folder-based documents
@@ -438,8 +442,8 @@ export default function ProfilePage() {
                 so users always see their photo without manually setting it. */}
             <div className="relative shrink-0">
               <div className="w-[72px] h-[72px] rounded-full bg-gradient-to-br from-[#008CFF] to-[#0055bb] flex items-center justify-center text-white text-[22px] font-bold overflow-hidden border-2 border-white dark:border-white/10 shadow-md">
-                {(form.profilePictureUrl || user?.image)
-                  ? <img src={form.profilePictureUrl || user?.image} alt={profile?.name || "Profile"} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                {(form.profilePictureUrl || user?.image) && !avatarBroken
+                  ? <img src={form.profilePictureUrl || user?.image} alt={profile?.name || "Profile"} referrerPolicy="no-referrer" onError={() => setAvatarBroken(true)} className="w-full h-full object-cover" />
                   : nameInitials}
               </div>
             </div>
@@ -755,8 +759,8 @@ export default function ProfilePage() {
               </div>
               <div className="px-5 py-4 flex items-center gap-4">
                 <div className="w-16 h-16 rounded-full bg-gradient-to-br from-[#008CFF] to-[#0055bb] flex items-center justify-center text-white text-lg font-bold overflow-hidden">
-                  {(form.profilePictureUrl || user?.image)
-                    ? <img src={form.profilePictureUrl || user?.image} alt="" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                  {(form.profilePictureUrl || user?.image) && !avatarBroken
+                    ? <img src={form.profilePictureUrl || user?.image} alt="" referrerPolicy="no-referrer" onError={() => setAvatarBroken(true)} className="w-full h-full object-cover" />
                     : nameInitials}
                 </div>
                 <div>

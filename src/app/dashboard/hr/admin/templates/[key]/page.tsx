@@ -449,7 +449,7 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
     const base = { customFields: customValues, action, letterDate: letterDate || null };
     return mode === "manual"
       ? { ...base, manual: { ...manualFields, brand: activeBrand } }
-      : { ...base, employeeId: employee?.id };
+      : { ...base, employeeId: employee?.id, brand: activeBrand };
   };
 
   const refreshPreview = async () => {
@@ -640,12 +640,15 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
               <div className="space-y-3">
                 <div>
                   <label className="text-[11px] uppercase tracking-wider font-semibold text-slate-500">Employee</label>
-                  {/* brand drives the picker filter so HR never picks a
-                      cross-brand employee for a brand-specific letter. */}
+                  {/* Cross-brand picking allowed (2026-09-25): HR sometimes
+                      issues an NB-template letter to a YT Labs person (and
+                      vice versa), so the picker searches BOTH brands. The
+                      letter still uses THIS page's template — generate now
+                      receives the page's brand explicitly instead of
+                      deriving it from the employee. */}
                   <EmployeePicker
                     value={employee}
                     onChange={(v) => { setEmployee(v); setPreview(null); }}
-                    brand={activeBrand}
                   />
                 </div>
                 {/* Inline designation editor — change the job title here and
@@ -1027,6 +1030,18 @@ function ManualInput({
 // `brand` (optional) restricts results to one businessUnit so HR
 // generating an NB Media letter never accidentally picks a YT Labs
 // employee (and vice versa).
+function PickAvatar({ url, name }: { url?: string | null; name: string }) {
+  const [broken, setBroken] = useState(false);
+  if (url && !broken) {
+    return <img src={url} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="h-7 w-7 rounded-full object-cover" />;
+  }
+  return (
+    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#008CFF] text-[10px] font-bold text-white">
+      {name.charAt(0)}
+    </span>
+  );
+}
+
 function EmployeePicker({
   value, onChange, brand,
 }: { value: Employee | null; onChange: (v: Employee | null) => void; brand?: string | null }) {
@@ -1065,13 +1080,7 @@ function EmployeePicker({
     <div ref={wrapRef} className="relative">
       {value ? (
         <div className="mt-1 flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-lg bg-white">
-          {value.profilePictureUrl ? (
-            <img src={value.profilePictureUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
-          ) : (
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#008CFF] text-[10px] font-bold text-white">
-              {value.name.charAt(0)}
-            </span>
-          )}
+          <PickAvatar url={value.profilePictureUrl} name={value.name} />
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-medium text-slate-800 truncate">{value.name}</p>
             <p className="text-[11px] text-slate-500 truncate">{value.designation?.label || value.email}</p>
@@ -1109,13 +1118,7 @@ function EmployeePicker({
               onClick={() => { onChange(u); setOpen(false); setQuery(""); }}
               className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 transition-colors text-left"
             >
-              {u.profilePictureUrl ? (
-                <img src={u.profilePictureUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
-              ) : (
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#008CFF] text-[10px] font-bold text-white">
-                  {u.name.charAt(0)}
-                </span>
-              )}
+              <PickAvatar url={u.profilePictureUrl} name={u.name} />
               <div className="min-w-0 flex-1">
                 <p className="text-[12.5px] font-medium text-slate-800 truncate">{u.name}</p>
                 <p className="text-[11px] text-slate-500 truncate">{u.designation?.label || u.email}</p>

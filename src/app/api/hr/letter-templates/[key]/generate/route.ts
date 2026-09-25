@@ -71,8 +71,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
     // matching template variant. NULL businessUnit on the
     // EmployeeProfile defaults to "NB Media" (the parent brand).
     let employeeBrand: string = "NB Media";
+    // The page states WHICH template it is editing (its brand) — that wins,
+    // so an NB-template letter can be generated for a YT Labs employee
+    // (cross-brand picking, 2026-09-25). Falls back to the employee's own
+    // brand for older callers that send no brand.
+    const bodyBrand: string | null =
+      body.brand === "YT Labs" || body.brand === "NB Media" ? body.brand : null;
     if (isManual) {
       employeeBrand = manual!.brand;
+    } else if (bodyBrand) {
+      employeeBrand = bodyBrand;
     } else {
       try {
         const brandRows = await prisma.$queryRawUnsafe<any[]>(

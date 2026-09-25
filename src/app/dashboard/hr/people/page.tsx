@@ -32,6 +32,15 @@ const ORG_TABS = [
   { key: "engage", label: "ENGAGE" },
 ];
 
+// Card avatar: Google-hosted photos (lh3) fail intermittently even with
+// no-referrer, and a bare <img> then shows the browser's broken-image glyph
+// - fall back to the initial instead.
+function CardPhoto({ url, muted, fallback }: { url?: string | null; muted?: boolean; fallback?: string }) {
+  const [broken, setBroken] = useState(false);
+  if (!url || broken) return <>{fallback}</>;
+  return <img src={url} className={`w-full h-full object-cover${muted ? " grayscale opacity-55" : ""}`} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
+}
+
 export default function PeoplePage() {
   const { data: session } = useSession();
   const user = session?.user as any;
@@ -197,7 +206,7 @@ export default function PeoplePage() {
                   <div className="flex items-start gap-4 mb-4">
                     {/* Avatar */}
                     <div className={`relative w-14 h-14 rounded-full bg-gradient-to-br ${exMuted ? "from-slate-400 to-slate-500" : "from-cyan-500 to-blue-600"} flex items-center justify-center text-slate-800 dark:text-white text-lg font-bold overflow-hidden ring-2 ring-white/[0.06] shrink-0`}>
-                      {emp.profilePictureUrl ? <img src={emp.profilePictureUrl} className={`w-full h-full object-cover${exMuted ? " grayscale opacity-55" : ""}`} alt="" referrerPolicy="no-referrer" /> : emp.name?.charAt(0)}
+                      <CardPhoto url={emp.profilePictureUrl} muted={exMuted} fallback={emp.name?.charAt(0)} />
                       {/* Crossed-out overlay — marks the person as no
                           longer with the company, matching the muted
                           avatar treatment. */}
