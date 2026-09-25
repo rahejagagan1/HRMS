@@ -449,7 +449,7 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
     const base = { customFields: customValues, action, letterDate: letterDate || null };
     return mode === "manual"
       ? { ...base, manual: { ...manualFields, brand: activeBrand } }
-      : { ...base, employeeId: employee?.id };
+      : { ...base, employeeId: employee?.id, brand: activeBrand };
   };
 
   const refreshPreview = async () => {
@@ -640,12 +640,15 @@ function TemplateEditorPageInner({ params }: { params: Promise<{ key: string }> 
               <div className="space-y-3">
                 <div>
                   <label className="text-[11px] uppercase tracking-wider font-semibold text-slate-500">Employee</label>
-                  {/* brand drives the picker filter so HR never picks a
-                      cross-brand employee for a brand-specific letter. */}
+                  {/* Cross-brand picking allowed (2026-09-25): HR sometimes
+                      issues an NB-template letter to a YT Labs person (and
+                      vice versa), so the picker searches BOTH brands. The
+                      letter still uses THIS page's template — generate now
+                      receives the page's brand explicitly instead of
+                      deriving it from the employee. */}
                   <EmployeePicker
                     value={employee}
                     onChange={(v) => { setEmployee(v); setPreview(null); }}
-                    brand={activeBrand}
                   />
                 </div>
                 {/* Inline designation editor — change the job title here and
