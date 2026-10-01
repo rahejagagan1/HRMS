@@ -4,7 +4,7 @@
 //
 // Rule: approver.businessUnit must equal requester.businessUnit, UNLESS
 // the approver is a founder / super-admin (orgLevel = "ceo" or
-// isDeveloper = true). Empty businessUnit on either side is treated as
+// isDeveloper = true) or the requester's own reporting manager. Empty businessUnit on either side is treated as
 // "NB Media" (the parent brand), so legacy rows without the column set
 // keep working.
 //
@@ -43,22 +43,23 @@ export async function assertSameBrandOrSuperAdmin(
   if (!self) return null; // upstream auth guard handles this
   if (isSuperAdmin(self)) return null;
 
-  // Approver's brand — fetch from their EmployeeProfile. Cache-friendly
-  // because Prisma will batch with the request-scope cache and this row
-  // is small.
-  const approverProfile = await prisma.employeeProfile.findFirst({
-    where: { user: { email: self.email } },
-    select: { businessUnit: true },
-  });
+  const [approver, requester] = await Promise.all([
+    prisma.user.findUnique({
+      where: { email: self.email },
+      select: { id: true, employeeProfile: { select: { businessUnit: true } } },
+    }),
+    prisma.user.findUnique({
+      where: { id: requesterUserId },
+      select: { managerId: true, employeeProfile: { select: { businessUnit: true } } },
+    }),
+  ]);
+  // The requester's own reporting manager may always act, whatever the
+  // brands — an NB Media manager of a YT Labs report approves their L1.
+  if (approver && requester?.managerId === approver.id) return null;
   // No profile yet (e.g. brand-new HR account) — fall back to NB Media
   // so they aren't locked out of the existing brand by default.
-  const approverBrand = normaliseBrand(approverProfile?.businessUnit);
-
-  const requesterProfile = await prisma.employeeProfile.findUnique({
-    where: { userId: requesterUserId },
-    select: { businessUnit: true },
-  });
-  const requesterBrand = normaliseBrand(requesterProfile?.businessUnit);
+  const approverBrand = normaliseBrand(approver?.employeeProfile?.businessUnit);
+  const requesterBrand = normaliseBrand(requester?.employeeProfile?.businessUnit);
 
   if (approverBrand === requesterBrand) return null;
   return NextResponse.json(

@@ -84,7 +84,10 @@ export async function GET(req: NextRequest) {
     // Org-wide brand isolation (2026-07-15) — matches /api/hr/approvals so
     // the badge counts agree with the rows the caller can actually see.
     const viewerClamp = brandScopeUserWhere(self);
-    if (Object.keys(viewerClamp).length) userClauses.push(viewerClamp);
+    if (isFinalApprover && Object.keys(viewerClamp).length) {
+      const selfId = await resolveUserId(session);
+      userClauses.push(selfId ? { OR: [viewerClamp, { managerId: selfId }] } : viewerClamp);
+    }
     if (brand === "YT Labs") {
       userClauses.push({ employeeProfile: { businessUnit: "YT Labs" } });
     } else if (brand === "NB Media") {
