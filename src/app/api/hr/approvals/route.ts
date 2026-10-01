@@ -90,11 +90,15 @@ export async function GET(req: NextRequest) {
     // the sub-clauses keeps both predicates active.
     const userClauses: any[] = [];
     if (!isFinalApprover) userClauses.push({ managerId: myId! });
-    // Org-wide brand isolation (2026-07-15): without VIEW_ALL_BRANDS the
-    // caller's queue only ever contains their OWN brand's employees,
-    // whatever ?brand= says. All-brands viewers pass through untouched.
+    // Org-wide brand isolation (2026-07-15): without VIEW_ALL_BRANDS a final
+    // approver's queue only contains their OWN brand's employees, whatever
+    // ?brand= says — plus their own direct reports from either brand.
+    // Plain managers are already scoped to their reports, so no clamp.
     const viewerClamp = brandScopeUserWhere(self);
-    if (Object.keys(viewerClamp).length) userClauses.push(viewerClamp);
+    if (isFinalApprover && Object.keys(viewerClamp).length) {
+      const selfId = await resolveUserId(session);
+      userClauses.push(selfId ? { OR: [viewerClamp, { managerId: selfId }] } : viewerClamp);
+    }
     if (brand === "YT Labs") {
       userClauses.push({ employeeProfile: { businessUnit: "YT Labs" } });
     } else if (brand === "NB Media") {
@@ -109,7 +113,7 @@ export async function GET(req: NextRequest) {
       userClauses.length === 1 ? { user: userClauses[0] } :
       { user: { AND: userClauses } };
 
-    const selectUser = { id: true, name: true, email: true, profilePictureUrl: true, teamCapsule: true, role: true };
+    const selectUser = { id: true, name: true, email: true, profilePictureUrl: true, teamCapsule: true, role: true, managerId: true };
     // `businessUnit` is needed by the UI so HR can split the approvals
     // list into NB Media vs YT Labs tabs (each manager sees their brand
     // by default; the founder sees both via the "All" tab).

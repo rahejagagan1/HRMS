@@ -64,7 +64,8 @@ export async function GET(req: NextRequest) {
       const scope = getBrandScope(self);
       if (!scope.allBrands) {
         if (!scope.brand) return NextResponse.json([]); // fail closed
-        where.user = { ...(where.user ?? {}), employeeProfile: { businessUnit: scope.brand } };
+        // Own brand, plus the caller's direct reports from either brand.
+        where.user = { ...(where.user ?? {}), OR: [{ employeeProfile: { businessUnit: scope.brand } }, { managerId: myId }] };
       }
     }
 

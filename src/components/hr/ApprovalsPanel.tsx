@@ -425,8 +425,10 @@ export default function ApprovalsPanel({
       const legal = deriveLegalEntity(u)    || "";
       // Company tab scope — applied before the user-controlled filters
       // so the counts on the existing filter dropdowns reflect just the
-      // selected brand.
-      if (companyTab !== "all") {
+      // selected brand. The viewer's own direct reports always show,
+      // whatever their brand (cross-brand reporting managers).
+      const isMyReport = me?.dbId != null && u.managerId === me.dbId;
+      if (companyTab !== "all" && !isMyReport) {
         if (bu !== companyTab) return false;
       }
       if (!matches(fBU,    bu))               return false;
@@ -470,7 +472,7 @@ export default function ApprovalsPanel({
         _rangeTo:   new Date(sorted[sorted.length - 1].date),
       };
     });
-  }, [rows, tab, fBU, fDept, fLoc, fCost, fLegal, fStatus, search, companyTab]);
+  }, [rows, tab, fBU, fDept, fLoc, fCost, fLegal, fStatus, search, companyTab, me?.dbId]);
 
   // Count rows per company for the tab chip badges so HR sees brand
   // workload at a glance. Derived from the same `rows` source so the
