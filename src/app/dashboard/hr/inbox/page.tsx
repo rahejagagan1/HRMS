@@ -367,10 +367,17 @@ export default function InboxPage() {
     const key = `${activeCat.prefix}${selected.id}`;
     setApproving(p => ({ ...p, [key]: true }));
     try {
-      await Promise.all(ids.map((id) => {
+      const responses = await Promise.all(ids.map((id) => {
         const { url, body } = approvalUrlFor(activeCat, { ...selected, id }, action);
         return fetch(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       }));
+      // Surface the server's refusal (403 cross-brand, 409 already decided…)
+      // instead of silently refreshing as if it worked.
+      const failed = responses.find((r) => !r.ok);
+      if (failed) {
+        const data = await failed.json().catch(() => ({}));
+        alert(data?.error || `Could not ${action} — request failed (${failed.status}).`);
+      }
       // Bust every related cache so the user sees the change everywhere.
       mutate((k: string) => typeof k === "string" && (
         k.includes("/api/hr/leaves") || k.includes("/api/hr/expenses") ||
