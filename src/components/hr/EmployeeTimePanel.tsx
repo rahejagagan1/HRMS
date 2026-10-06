@@ -493,6 +493,9 @@ export function EmployeeTimePanel({
     if (start.getTime() > end.getTime()) return [] as any[];
     const byDate = new Map<string, any>();
     for (const r of records) byDate.set(String(r.date).slice(0, 10), r);
+    const holidayByDate = new Map<string, string>(
+      ((data as any)?.holidays ?? []).map((h: any) => [h.date, h.name]),
+    );
     const out: any[] = [];
     for (let d = new Date(start.getTime()); d.getTime() <= end.getTime(); d.setUTCDate(d.getUTCDate() + 1)) {
       const iso = d.toISOString().slice(0, 10);
@@ -510,12 +513,14 @@ export function EmployeeTimePanel({
         // CEO + developers — only synthesize weekends (calendar context).
         // Drop the "Absent" placeholders so the log isn't a wall of
         // cross-marks for someone who doesn't punch a clock.
-        if (skipAbsentSynthesis && !isWeekend) continue;
+        const holidayName = holidayByDate.get(iso);
+        if (skipAbsentSynthesis && !isWeekend && !holidayName) continue;
         out.push({
           id: `synth-${iso}`,
           date: `${iso}T00:00:00.000Z`,
           clockIn: null, clockOut: null, totalMinutes: 0,
-          status: isWeekend ? "weekly_off" : "absent",
+          status: holidayName ? "holiday" : isWeekend ? "weekly_off" : "absent",
+          notes: holidayName,
         });
       }
     }
