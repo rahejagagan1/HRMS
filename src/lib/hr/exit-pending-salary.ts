@@ -12,7 +12,7 @@
 //   pendingNet = fullMonthlyNet × lopFactor      (net = gross − PF − PT − TDS − ₹200)
 
 import prisma from "@/lib/prisma";
-import { priceMissedSwipes, shiftContextForUsers, isPayrollWorkingDay } from "@/lib/hr/lop-integrity";
+import { priceMissedSwipes, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const num = (v: unknown) => parseFloat(String(v ?? 0)) || 0;
@@ -81,6 +81,7 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
   // payroll: shift-aware (working Saturdays count off the employee's OWN
   // calendar), and a half-day LWP docks 0.5, not a full day.
   const shiftCtx = (await shiftContextForUsers([exit.userId])).get(exit.userId);
+  const longLwp = (await longLwpDates([exit.userId], firstDay, lwd)).get(exit.userId);
   const unpaidLeaves = await prisma.leaveApplication.findMany({
     where: { userId: exit.userId, status: "approved", fromDate: { lte: lwd }, toDate: { gte: firstDay }, leaveType: { isPaid: false } },
     select: { fromDate: true, toDate: true, reason: true, totalDays: true },
@@ -93,7 +94,7 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
     const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
     const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
     while (cur.getTime() <= stop.getTime()) {
-      if (isPayrollWorkingDay(cur, shiftCtx)) unpaidLeaveDays += perDay;
+      if (isPayrollWorkingDay(cur, shiftCtx) || longLwp?.has(cur.toISOString().slice(0, 10))) unpaidLeaveDays += perDay;
       cur.setUTCDate(cur.getUTCDate() + 1);
     }
   }

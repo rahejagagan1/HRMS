@@ -89,6 +89,52 @@ export async function shiftContextForUsers(userIds: number[]): Promise<Map<numbe
   return new Map(rows.map((r) => [r.userId, r]));
 }
 
+/** Long-LWP sandwich rule (2026-10-06): an unbroken unpaid-leave stretch of
+ *  MORE than 15 calendar days charges every day in it — weekends and holidays
+ *  included. Shorter stretches keep the working-days-only charge. Approved
+ *  LWP applications that touch or overlap chain into one stretch, and the
+ *  stretch is measured in full even where it spills outside the window.
+ *  Returns, per user, the YYYY-MM-DD dates in [firstDay, lastDay] the rule
+ *  covers — the unpaid-leave loops charge those regardless of the calendar.
+ *  ponytail: applications separated by an off-day gap (LWP Mon–Fri, next
+ *  LWP Mon–Fri) don't chain — add gap bridging if that case shows up. */
+export const LONG_LWP_DAYS = 15;
+export async function longLwpDates(userIds: number[], firstDay: Date, lastDay: Date): Promise<Map<number, Set<string>>> {
+  const out = new Map<number, Set<string>>();
+  if (userIds.length === 0) return out;
+  // Unbounded by date on purpose: a stretch that started months earlier
+  // still counts toward the 15 days.
+  const rows = await prisma.leaveApplication.findMany({
+    where: { userId: { in: userIds }, status: "approved", leaveType: { isPaid: false } },
+    select: { userId: true, fromDate: true, toDate: true, totalDays: true },
+    orderBy: { fromDate: "asc" },
+  });
+  const DAY = 86_400_000;
+  const lo = Date.UTC(firstDay.getUTCFullYear(), firstDay.getUTCMonth(), firstDay.getUTCDate());
+  const hi = Date.UTC(lastDay.getUTCFullYear(), lastDay.getUTCMonth(), lastDay.getUTCDate());
+  const flush = (userId: number, s: number, e: number) => {
+    if ((e - s) / DAY + 1 <= LONG_LWP_DAYS || e < lo || s > hi) return;
+    const set = out.get(userId) ?? new Set<string>();
+    for (let t = Math.max(s, lo); t <= Math.min(e, hi); t += DAY) set.add(ymd(new Date(t)));
+    out.set(userId, set);
+  };
+  const byUser = new Map<number, typeof rows>();
+  for (const r of rows) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r]);
+  for (const [userId, list] of byUser) {
+    let s = -1, e = -1;
+    for (const r of list) {
+      // A half-day LWP is a single date — never part of a long stretch.
+      if (Number(r.totalDays) <= 0.5) continue;
+      const f = r.fromDate.getTime(), t = r.toDate.getTime();
+      if (s >= 0 && f <= e + DAY) { e = Math.max(e, t); continue; }
+      if (s >= 0) flush(userId, s, e);
+      s = f; e = t;
+    }
+    if (s >= 0) flush(userId, s, e);
+  }
+  return out;
+}
+
 /** A shift assignment governs only dates ON/AFTER its effectiveFrom. Days
  *  before it were lived under a different (since-overwritten) shift, so
  *  current-shift rules must not re-judge them — they fall back to the

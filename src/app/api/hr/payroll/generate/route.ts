@@ -4,7 +4,7 @@ import { requireAuth, canViewSalary, serverError } from "@/lib/api-auth";
 import { normaliseBrandParam } from "@/lib/hr/brand-scope";
 import { readBrandStatus, materializeBrandStatus } from "@/lib/hr/payroll-run-status";
 import { getMonthSalary } from "@/lib/hr/salary-periods";
-import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay } from "@/lib/hr/lop-integrity";
+import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
 
 // POST /api/hr/payroll/generate — produce draft payslips for a payroll run.
 // Math model:
@@ -308,6 +308,8 @@ export async function POST(req: NextRequest) {
     // Shift work-rules so unpaid-leave days below count off each employee's
     // OWN calendar (working Saturdays included), not a blanket Mon–Fri.
     const shiftCtxByUser = await shiftContextForUsers(userIds);
+    // >15-day LWP stretches charge weekends + holidays too (sandwich rule).
+    const longLwpByUser = await longLwpDates(userIds, firstDay, lastDay);
 
     let totalNetPay = 0, totalCTC = 0, skipped = 0;
 
@@ -357,7 +359,8 @@ export async function POST(req: NextRequest) {
           // Shift-aware: an LWP on the employee's WORKING Saturday charges
           // like any working day (the old blanket dow≠0/6 check let a
           // working-Saturday LWP slip through unpaid-leave for free).
-          if (isPayrollWorkingDay(cur, shiftCtxByUser.get(s.userId))) unpaidLeaveDays += perDay;
+          if (isPayrollWorkingDay(cur, shiftCtxByUser.get(s.userId))
+            || longLwpByUser.get(s.userId)?.has(cur.toISOString().slice(0, 10))) unpaidLeaveDays += perDay;
           cur.setUTCDate(cur.getUTCDate() + 1);
         }
       }
