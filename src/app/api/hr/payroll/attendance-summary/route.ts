@@ -15,7 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, canViewSalary, serverError } from "@/lib/api-auth";
 import { resolveBrandScope } from "@/lib/hr/brand-scope";
-import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay } from "@/lib/hr/lop-integrity";
+import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
 
 export const dynamic = "force-dynamic";
 
@@ -198,7 +198,9 @@ export async function GET(req: NextRequest) {
             ${brandClause}`,
         monthStart, monthEnd, ...brandArgs,
       );
-      const lwpShiftCtx = await shiftContextForUsers(Array.from(new Set(lwpRows.map((r) => r.userId))));
+      const lwpUserIds = Array.from(new Set(lwpRows.map((r) => r.userId)));
+      const lwpShiftCtx = await shiftContextForUsers(lwpUserIds);
+      const longLwp = await longLwpDates(lwpUserIds, monthStart, monthEnd);
       for (const lv of lwpRows) {
         const weight = isHalfDayLeave(lv) ? 0.5 : 1;
         const from = new Date(lv.fromDate), to = new Date(lv.toDate);
@@ -211,7 +213,8 @@ export async function GET(req: NextRequest) {
           // Shift-aware (mirrors payroll/generate): a working Saturday per
           // the employee's OWN shift counts; a Mon–Fri fallback applies when
           // no shift is assigned.
-          if (isPayrollWorkingDay(cur, lwpShiftCtx.get(lv.userId))) {
+          // Inside a >15-day LWP stretch, weekends + holidays charge too.
+          if (isPayrollWorkingDay(cur, lwpShiftCtx.get(lv.userId)) || longLwp.get(lv.userId)?.has(ymd(cur))) {
             row.lwpDays += weight;
             row.lopDays += weight;
             row.dates.push({

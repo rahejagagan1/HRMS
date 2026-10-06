@@ -565,7 +565,15 @@ export default function ApprovalsPanel({
       return;
     }
 
-    await Promise.all(ids.map((id) => doOne(id)));
+    const responses = await Promise.all(ids.map((id) => doOne(id)));
+    // Surface the server's refusal (403 cross-brand, 409 already decided…)
+    // instead of silently refreshing as if it worked — same as the Inbox.
+    const failed = responses.filter((r) => !r.ok);
+    if (failed.length) {
+      const data = await failed[0].json().catch(() => ({}));
+      const prefix = ids.length > 1 ? `${failed.length} of ${ids.length} failed: ` : "";
+      alert(prefix + (data?.error || `Could not ${action} — request failed (${failed[0].status}).`));
+    }
     mutate((k: any) =>
       typeof k === "string" && (
         k.startsWith("/api/hr/approvals") ||

@@ -85,6 +85,14 @@ export async function GET(req: NextRequest) {
       orderBy: { date: "asc" },
     });
 
+    // Non-optional holidays in the window — the log renders these as
+    // "Holiday" instead of synthesizing "Absent". Optional (floater)
+    // holidays stay working days, same rule as auto-LOP.
+    const holidays = await prisma.holidayCalendar.findMany({
+      where: { date: { gte: fromDate, lte: toDate }, NOT: { type: "optional" } },
+      select: { date: true, name: true },
+    });
+
     // Short-leave applications overlapping the page. A short leave excuses
     // 2h per slot, so the day's required bar drops by that much — without
     // this, re-derivation below judged a completed reduced day (e.g. 7h of a
@@ -313,6 +321,7 @@ export async function GET(req: NextRequest) {
       // Non-null only for a rehired employee — the client clamps the day
       // series to it so pre-rejoin days aren't synthesized as absences.
       rehiredAt,
+      holidays: holidays.map((h) => ({ date: h.date.toISOString().slice(0, 10), name: h.name })),
     });
   } catch (e) {
     return serverError(e, "GET /api/hr/attendance");
