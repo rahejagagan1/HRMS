@@ -61,7 +61,7 @@ const SHEETS: SheetDef[] = [
 // so it never renders for a broader HR-admin who can't see pay.
 const SALARY_SHEET: SheetDef = {
   key: "salaries", label: "Salaries",
-  desc: "Per-employee annual CTC and monthly salary. Restricted to HR Manager, CEO & admin.",
+  desc: "Per-employee annual CTC, monthly salary and bank details (bank, account no., IFSC). Restricted to HR Manager, CEO & admin.",
   icon: IndianRupee,
 };
 

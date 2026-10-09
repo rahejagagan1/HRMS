@@ -224,6 +224,9 @@ async function addEmployeesSheet(
       { header: "Annual CTC (₹)",     key: "ctc",     width: 16, style: { numFmt: "#,##0" } },
       { header: "Monthly Salary (₹)", key: "monthly", width: 18, style: { numFmt: "#,##0" } },
       { header: "Salary Effective",   key: "salEff",  width: 16 },
+      { header: "Bank Name",          key: "bank",    width: 24 },
+      { header: "Account Number",     key: "acct",    width: 22, style: { numFmt: "@" } },
+      { header: "IFSC",               key: "ifsc",    width: 14 },
     ] : []),
   ];
   for (const u of users) {
@@ -241,12 +244,16 @@ async function addEmployeesSheet(
       ms: p?.maritalStatus ?? "",
     };
     if (includeSalary) {
-      // Only populate pay for rows inside the viewer's salary brand scope.
-      const s = rowInSalaryBrand(p?.businessUnit, salaryBrand) ? (u as any).salaryStructure : null;
+      // Only populate pay + bank for rows inside the viewer's salary brand scope.
+      const inScope = rowInSalaryBrand(p?.businessUnit, salaryBrand);
+      const s = inScope ? (u as any).salaryStructure : null;
       const ctc = s ? Number(s.ctc ?? 0) : null;
       row.ctc     = ctc ?? "";
       row.monthly = ctc != null ? Math.round(ctc / 12) : "";
       row.salEff  = s ? fmtDate(s.effectiveFrom as any) : "";
+      row.bank    = inScope ? p?.bankName ?? "" : "";
+      row.acct    = inScope ? p?.bankAccountNumber ?? "" : "";
+      row.ifsc    = inScope ? (p?.bankIfsc ?? "").toUpperCase() : "";
     }
     ws.addRow(row);
   }
@@ -264,11 +271,13 @@ async function addSalariesSheet(wb: ExcelJS.Workbook, brand: BrandFilter, status
     where: userWhere(brand, statusWhere),
     orderBy: { name: "asc" },
     include: {
-      employeeProfile: { select: { employeeId: true, department: true, businessUnit: true } },
+      employeeProfile: { select: { employeeId: true, department: true, businessUnit: true, bankName: true, bankAccountNumber: true, bankIfsc: true } },
       salaryStructure: true,
     },
   });
   const ws = wb.addWorksheet("Salaries");
+  // Bank details ride on this sheet (not Employees) so they inherit the
+  // canViewSalary gate — the payout data belongs with the pay figures.
   ws.columns = [
     { header: "HRM No.",            key: "hrm",     width: 12 },
     { header: "Name",               key: "name",    width: 24 },
@@ -278,6 +287,11 @@ async function addSalariesSheet(wb: ExcelJS.Workbook, brand: BrandFilter, status
     { header: "Annual CTC (₹)",     key: "ctc",     width: 16, style: { numFmt: "#,##0" } },
     { header: "Monthly Salary (₹)", key: "monthly", width: 18, style: { numFmt: "#,##0" } },
     { header: "Effective From",     key: "eff",     width: 14 },
+    { header: "Bank Name",          key: "bank",    width: 24 },
+    // Text format keeps leading zeros and stops Excel turning long account
+    // numbers into 1.23E+15.
+    { header: "Account Number",     key: "acct",    width: 22, style: { numFmt: "@" } },
+    { header: "IFSC",               key: "ifsc",    width: 14 },
   ];
   for (const u of users) {
     const s = u.salaryStructure;
@@ -291,6 +305,9 @@ async function addSalariesSheet(wb: ExcelJS.Workbook, brand: BrandFilter, status
       ctc:     ctc ?? "",
       monthly: ctc != null ? Math.round(ctc / 12) : "",
       eff:   s ? fmtDate(s.effectiveFrom as any) : "",
+      bank:  u.employeeProfile?.bankName ?? "",
+      acct:  u.employeeProfile?.bankAccountNumber ?? "",
+      ifsc:  (u.employeeProfile?.bankIfsc ?? "").toUpperCase(),
     });
   }
   styleSheet(ws);
