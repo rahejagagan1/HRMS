@@ -4,7 +4,9 @@
 //
 // Rule: approver.businessUnit must equal requester.businessUnit, UNLESS
 // the approver is a founder / super-admin (orgLevel = "ceo" or
-// isDeveloper = true) or the requester's own reporting manager. Empty businessUnit on either side is treated as
+// isDeveloper = true), the requester's own reporting manager, or holds a
+// both-brands HR designation (CROSS_BRAND_HR_DESIGNATIONS — the NB Media HR
+// Manager). Empty businessUnit on either side is treated as
 // "NB Media" (the parent brand), so legacy rows without the column set
 // keep working.
 //
@@ -26,6 +28,13 @@ function isSuperAdmin(user: any): boolean {
   return user?.orgLevel === "ceo" || user?.isDeveloper === true;
 }
 
+// Designations that run HR for BOTH brands (2026-10-09: the NB Media HR
+// Manager is HR manager of NB Media and YT Labs, so must clear L1 + L2 for
+// either). Keyed on the designation, not the person, so whoever holds it
+// next inherits the access. The YT Labs HR Manager (hr_manager_yt_labs)
+// stays single-brand.
+const CROSS_BRAND_HR_DESIGNATIONS = new Set(["hr_manager"]);
+
 function normaliseBrand(bu: string | null | undefined): string {
   return (bu || "").trim() || "NB Media";
 }
@@ -46,7 +55,7 @@ export async function assertSameBrandOrSuperAdmin(
   const [approver, requester] = await Promise.all([
     prisma.user.findUnique({
       where: { email: self.email },
-      select: { id: true, employeeProfile: { select: { businessUnit: true } } },
+      select: { id: true, designation: { select: { key: true } }, employeeProfile: { select: { businessUnit: true } } },
     }),
     prisma.user.findUnique({
       where: { id: requesterUserId },
@@ -56,6 +65,7 @@ export async function assertSameBrandOrSuperAdmin(
   // The requester's own reporting manager may always act, whatever the
   // brands — an NB Media manager of a YT Labs report approves their L1.
   if (approver && requester?.managerId === approver.id) return null;
+  if (approver?.designation?.key && CROSS_BRAND_HR_DESIGNATIONS.has(approver.designation.key)) return null;
   // No profile yet (e.g. brand-new HR account) — fall back to NB Media
   // so they aren't locked out of the existing brand by default.
   const approverBrand = normaliseBrand(approver?.employeeProfile?.businessUnit);
