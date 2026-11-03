@@ -26,7 +26,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const { run, rows } = await loadExportRows(runId);
     // Brand split: ?brand= exports only that brand's employees; no brand => all.
-    const brand = brandParam(req);
+    const brand = brandParam(req, session!.user);
     const runStatus = readBrandStatus(run, brand).status;
     if (runStatus !== "locked" && runStatus !== "paid") {
       return NextResponse.json({ error: `Lock the run first — currently '${runStatus}'` }, { status: 409 });

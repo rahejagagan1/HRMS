@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import mammoth from "mammoth";
 import { requireAuth, serverError } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
+import { canViewSalary } from "@/lib/api-auth";
 import { renderOfferLetterDocx } from "@/lib/offer-letter-from-docx";
 import { docxToPdf } from "@/lib/docx-to-pdf";
 
@@ -32,7 +33,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   const { session, errorResponse } = await requireAuth();
   if (errorResponse) return errorResponse;
-  if (!isHRAdmin(session!.user)) {
+  if (!isHRAdmin(session!.user) || !canViewSalary(session!.user)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

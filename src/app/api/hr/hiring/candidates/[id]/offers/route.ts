@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
+import { canViewSalary } from "@/lib/api-auth";
 import { sendEmail } from "@/lib/email/sender";
 import { renderOfferLetterDocxAttachment } from "@/lib/offer-letter-from-docx";
 
@@ -36,7 +37,7 @@ function approxBase64Bytes(b64: string): number {
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { session, errorResponse } = await requireAuth();
   if (errorResponse) return errorResponse;
-  if (!isHRAdmin(session!.user)) {
+  if (!isHRAdmin(session!.user) || !canViewSalary(session!.user)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

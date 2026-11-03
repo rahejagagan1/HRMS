@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
+import { requireAuth, resolveUserId, serverError, canViewSalary } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
 import { gravatarUrl } from "@/lib/gravatar";
 import { resolveTemplate } from "@/lib/hr/email-merge";
@@ -242,6 +242,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       photoUrl: gravatarUrl(row.email, 240),
     };
 
+    // Salary fields (current / expected pay, offer CTC) — VIEW_SALARY only.
+    if (!canViewSalary(session!.user)) {
+      delete (candidate as any).currentSalary;
+      delete (candidate as any).expectedSalary;
+      for (const o of offers as any[]) o.ctcAnnual = null;
+    }
     return NextResponse.json({ candidate, stageHistory, interviews, activity, offers });
   } catch (e) {
     return serverError(e, "GET /api/hr/hiring/candidates/[id]");
@@ -527,8 +533,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       pushNum("availableToJoinDays", "availableToJoinDays", 3650, false);
       pushNum("experienceYears",     "experienceYears",       80, false);
       pushNum("experienceMonths",    "experienceMonths",      11, false);
-      pushNum("currentSalary",       "currentSalary",       1e12, true);
-      pushNum("expectedSalary",      "expectedSalary",      1e12, true);
+      if (canViewSalary(session!.user)) {
+        pushNum("currentSalary",       "currentSalary",       1e12, true);
+        pushNum("expectedSalary",      "expectedSalary",      1e12, true);
+      }
       pushStr("currentCompany",      "currentCompany");
       pushStr("currentLocation",     "currentLocation");
 

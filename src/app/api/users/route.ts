@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth, serverError } from "@/lib/api-auth";
+import { requireAuth, serverError, canViewSalary } from "@/lib/api-auth";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 import { brandScopeUserWhere } from "@/lib/hr/brand-scope";
 import { getServerSession } from "next-auth";
@@ -485,7 +485,13 @@ export async function POST(request: NextRequest) {
             // anywhere else in the app (Finances tab, profile Compensation
             // panel, payroll) still requires canViewSalary — the salary-
             // structure POST behind those surfaces keeps its own gate.
-            if (compensation && typeof compensation === "object") {
+            // The exception covers a NEW salary only: re-POSTing an existing
+            // employee's email must not overwrite a salary already on file
+            // unless the caller holds VIEW_SALARY.
+            const salaryOnFile = existing
+                ? await tx.salaryStructure.findUnique({ where: { userId: existing.id }, select: { id: true } })
+                : null;
+            if (compensation && typeof compensation === "object" && (!salaryOnFile || canViewSalary(session?.user))) {
                 const effectiveFrom = compensation.effectiveFrom
                     ? new Date(compensation.effectiveFrom)
                     : new Date();

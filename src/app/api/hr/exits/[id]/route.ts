@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, canViewSalary } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
@@ -128,8 +128,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
     return NextResponse.json({
       exit,
-      settlement: settlement[0] ?? null,
-      settlementLines: lines,
+      // F&F amounts are pay data — VIEW_SALARY only, not every HR admin.
+      settlement: canViewSalary(session?.user) ? settlement[0] ?? null : null,
+      settlementLines: canViewSalary(session?.user) ? lines : [],
       tasks,
       survey: survey[0] ?? null,
       notes,

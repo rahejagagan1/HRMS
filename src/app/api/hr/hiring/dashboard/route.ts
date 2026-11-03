@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, serverError } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
+import { canViewSalary } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,8 @@ export async function GET() {
   if (!isHRAdmin(session!.user)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  // Offer CTC is salary data — NULL it for HR admins without VIEW_SALARY.
+  const ctcCol = canViewSalary(session!.user) ? `ol."ctcAnnual"` : `NULL::numeric AS "ctcAnnual"`;
 
   try {
     const [
@@ -113,7 +116,7 @@ export async function GET() {
           ORDER BY jobs DESC, name ASC`,
       ), [] as any[]),
       safe(() => prisma.$queryRawUnsafe<any[]>(
-        `SELECT ol."id", ol."ctcAnnual", ol."joiningDate", ol."createdAt",
+        `SELECT ol."id", ${ctcCol}, ol."joiningDate", ol."createdAt",
                 a."fullName" AS "candidateName", o."title" AS "jobTitle"
            FROM "OfferLetter" ol
            JOIN "JobApplication" a ON a."id" = ol."applicationId"
@@ -122,7 +125,7 @@ export async function GET() {
           ORDER BY ol."createdAt" DESC LIMIT 10`,
       ), [] as any[]),
       safe(() => prisma.$queryRawUnsafe<any[]>(
-        `SELECT ol."id", ol."ctcAnnual", ol."joiningDate", ol."acceptedAt",
+        `SELECT ol."id", ${ctcCol}, ol."joiningDate", ol."acceptedAt",
                 a."fullName" AS "candidateName", o."title" AS "jobTitle"
            FROM "OfferLetter" ol
            JOIN "JobApplication" a ON a."id" = ol."applicationId"

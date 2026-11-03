@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
+import { requireAuth, resolveUserId, serverError, canViewSalary } from "@/lib/api-auth";
 import { serializeBigInt } from "@/lib/utils";
 import { istTodayDateOnly } from "@/lib/ist-date";
 import { isHRAdmin, isLeadershipOrHR, canViewExitBadge } from "@/lib/access";
@@ -218,8 +218,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     // employee in payroll — summed for the Exit Statement (amount adds to
     // earnings; days are shown for reference). Days live in the comment
     // ("N/M day(s) advance salary …"), so parse the leading number.
+    // Pay data — VIEW_SALARY only (was open to any logged-in viewer).
+    const salaryOk = canViewSalary(sUser);
     let advanceSalary = { days: 0, amount: 0 };
-    try {
+    if (salaryOk) try {
       const asRows = await prisma.$queryRawUnsafe<Array<{ amount: string; comment: string | null }>>(
         `SELECT amount::text AS amount, comment FROM "AdhocLineItem" WHERE "userId" = $1 AND type = 'Advance Salary'`,
         id,
@@ -234,10 +236,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const payload = {
       ...rest,
       advanceSalary,
-      // Salary (CTC) is the most sensitive field — HR / CEO / developer
-      // only. Stripped for a direct manager or the employee themselves on
-      // this route. `...rest` carries salaryStructure, so override after.
-      salaryStructure: isDocViewer ? ((rest as any).salaryStructure ?? null) : null,
+      // Salary (CTC) is the most sensitive field — VIEW_SALARY holders only
+      // (HR Staff with HR_CONFIDENTIAL but no VIEW_SALARY used to get it).
+      // Stripped for a direct manager or the employee themselves on this
+      // route. `...rest` carries salaryStructure, so override after.
+      salaryStructure: salaryOk ? ((rest as any).salaryStructure ?? null) : null,
       profile:       mergedProfile,
       documents:     docsAllowed ? ownedDocuments : [],
       // Asset assignments (serial numbers etc.) follow the same gate as

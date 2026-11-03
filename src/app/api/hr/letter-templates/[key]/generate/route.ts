@@ -11,8 +11,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth, isLeadershipOrHR, resolveUserId, serverError } from "@/lib/api-auth";
-import { renderLetterHtml, wrapLetterPreviewHtml } from "@/lib/hr/letter-render";
+import { requireAuth, isLeadershipOrHR, resolveUserId, serverError, canViewSalary } from "@/lib/api-auth";
+import { renderLetterHtml, wrapLetterPreviewHtml, isSalaryLetter } from "@/lib/hr/letter-render";
 import { htmlToPdf } from "@/lib/hr/html-to-pdf";
 import { savePendingDocument } from "@/lib/hr/pending-documents";
 
@@ -113,6 +113,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
       }, { status: 404 });
     }
     const tpl = rows[0];
+    // Pay letters (salary breakup, F&F / exit settlement, advance salary)
+    // are salary data — VIEW_SALARY only, not the whole HR/leadership tier.
+    if (isSalaryLetter(tpl.bodyHtml) && !canViewSalary(session!.user)) {
+      return NextResponse.json({ error: "This letter contains salary details — salary access required." }, { status: 403 });
+    }
 
     const { html, missing } = await renderLetterHtml(
       tpl.bodyHtml,

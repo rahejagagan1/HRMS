@@ -15,13 +15,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, canViewSalary } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
-// Use canonical isHRAdmin helper.
-const canManage = (session: any) => isHRAdmin(session?.user);
+// Use canonical isHRAdmin helper. F&F amounts are pay data, so VIEW_SALARY too.
+const canManage = (session: any) => isHRAdmin(session?.user) && canViewSalary(session?.user);
 
 const PAY_ACTIONS = new Set(["pay", "recover", "carryover", "hold"]);
 const PAYMENT_MODES = new Set(["pay", "hold", "recover"]);
