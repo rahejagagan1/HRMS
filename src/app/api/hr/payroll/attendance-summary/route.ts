@@ -16,6 +16,7 @@ import prisma from "@/lib/prisma";
 import { requireAuth, canViewSalary, serverError } from "@/lib/api-auth";
 import { resolveBrandScope } from "@/lib/hr/brand-scope";
 import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
+import { isShortLeaveReason, SHORT_LEAVE_DAYS } from "@/lib/hr/short-leave";
 
 export const dynamic = "force-dynamic";
 
@@ -202,7 +203,7 @@ export async function GET(req: NextRequest) {
       const lwpShiftCtx = await shiftContextForUsers(lwpUserIds);
       const longLwp = await longLwpDates(lwpUserIds, monthStart, monthEnd);
       for (const lv of lwpRows) {
-        const weight = isHalfDayLeave(lv) ? 0.5 : 1;
+        const weight = isShortLeaveReason(lv.reason) ? SHORT_LEAVE_DAYS : isHalfDayLeave(lv) ? 0.5 : 1;
         const from = new Date(lv.fromDate), to = new Date(lv.toDate);
         const start = from > monthStart ? from : monthStart;
         const end   = to   < monthEnd   ? to   : monthEnd;

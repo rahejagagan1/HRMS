@@ -5,6 +5,7 @@ import { normaliseBrandParam } from "@/lib/hr/brand-scope";
 import { readBrandStatus, materializeBrandStatus } from "@/lib/hr/payroll-run-status";
 import { getMonthSalary } from "@/lib/hr/salary-periods";
 import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
+import { isShortLeaveReason, SHORT_LEAVE_DAYS } from "@/lib/hr/short-leave";
 
 // POST /api/hr/payroll/generate — produce draft payslips for a payroll run.
 // Math model:
@@ -348,9 +349,10 @@ export async function POST(req: NextRequest) {
       const unpaidLeaves = unpaidLeavesByUser.get(s.userId) ?? [];
       let unpaidLeaveDays = 0;
       for (const lv of unpaidLeaves) {
-        // A half-day LWP docks only its own half — the other half is either
+        // A short-leave LWP ([Short Leave - …], 2h) docks ¼ day; a half-day LWP
+        // docks only its own half — the other half is either
         // worked (scored via attendance above) or a paid half-leave.
-        const perDay = isHalfDayLeave(lv) ? 0.5 : 1;
+        const perDay = isShortLeaveReason(lv.reason) ? SHORT_LEAVE_DAYS : isHalfDayLeave(lv) ? 0.5 : 1;
         const start = lv.fromDate > firstDay ? lv.fromDate : firstDay;
         const end   = lv.toDate   < lastDay  ? lv.toDate   : lastDay;
         const cur   = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
