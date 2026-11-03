@@ -498,13 +498,26 @@ export async function POST(req: NextRequest) {
       ));
     }
 
+    // Regenerate = rebuild: drop this run's payslips (same brand scope) that
+    // this pass did NOT produce — someone exited / deactivated / put on a
+    // processing hold since the last generate. Upsert alone left their old
+    // slip in the run (Oct 2026: 3 YT Labs exits kept full-month payslips).
+    const ytLabs = { employeeProfile: { is: { businessUnit: "YT Labs" } } };
+    const removed = await prisma.payslip.deleteMany({
+      where: {
+        payrollRunId: runId,
+        userId: { notIn: payslipsData.map(p => p.userId) },
+        ...(brand === "YT Labs" ? { user: ytLabs } : brand === "NB Media" ? { user: { NOT: ytLabs } } : {}),
+      },
+    });
+
     const updated = await setRunStatus("generated", {
       totalCTC: totalCTC.toFixed(2),
       totalNetPay: totalNetPay.toFixed(2),
     });
 
     return NextResponse.json({
-      run: updated, payslipsGenerated: payslipsData.length, skipped,
+      run: updated, payslipsGenerated: payslipsData.length, skipped, stalePayslipsRemoved: removed.count,
       // Data-integrity trace: what the missed-swipe repricing charged and any
       // rows whose stored status contradicts their own penalty note. The run
       // UI surfaces these; they're also in the pre-check (attendance-summary).
