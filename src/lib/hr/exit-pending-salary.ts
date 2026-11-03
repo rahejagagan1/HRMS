@@ -13,6 +13,7 @@
 
 import prisma from "@/lib/prisma";
 import { priceMissedSwipes, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
+import { isShortLeaveReason, SHORT_LEAVE_DAYS } from "@/lib/hr/short-leave";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const num = (v: unknown) => parseFloat(String(v ?? 0)) || 0;
@@ -88,7 +89,7 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
   });
   let unpaidLeaveDays = 0;
   for (const lv of unpaidLeaves) {
-    const perDay = isHalfDayLeave(lv) ? 0.5 : 1;
+    const perDay = isShortLeaveReason(lv.reason) ? SHORT_LEAVE_DAYS : isHalfDayLeave(lv) ? 0.5 : 1;
     const start = lv.fromDate > firstDay ? lv.fromDate : firstDay;
     const end = lv.toDate < lwd ? lv.toDate : lwd;
     const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
