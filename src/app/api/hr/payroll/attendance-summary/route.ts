@@ -16,7 +16,7 @@ import prisma from "@/lib/prisma";
 import { requireAuth, canViewSalary, serverError } from "@/lib/api-auth";
 import { resolveBrandScope } from "@/lib/hr/brand-scope";
 import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
-import { isShortLeaveReason, SHORT_LEAVE_DAYS } from "@/lib/hr/short-leave";
+import { unpaidLeaveDayWeight } from "@/lib/hr/short-leave";
 
 export const dynamic = "force-dynamic";
 
@@ -178,12 +178,8 @@ export async function GET(req: NextRequest) {
       // that overlap the cycle. Payroll counts these weekdays as LOP too;
       // expand each to its individual weekdays with the leave type as the
       // reason so the date-level view is complete. A single-date HALF-day
-      // LWP ([Half Day]/[First Half]/[Second Half] marker) weighs 0.5, not
-      // 1 — mirrors payroll/generate.
-      const isHalfDayLeave = (lv: { fromDate: Date; toDate: Date; reason: string | null; totalDays: unknown }) =>
-        /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
-        && Number(lv.totalDays) <= 0.5
-        && new Date(lv.fromDate).getTime() === new Date(lv.toDate).getTime();
+      // LWP weighs 0.5 and a short-leave LWP 0.25 — shared unpaidLeaveDayWeight,
+      // same as payroll/generate.
       const lwpRows = await prisma.$queryRawUnsafe<{
         userId: number; userName: string; employeeId: string | null; leaveType: string;
         fromDate: Date; toDate: Date; reason: string | null; totalDays: string;
@@ -203,7 +199,7 @@ export async function GET(req: NextRequest) {
       const lwpShiftCtx = await shiftContextForUsers(lwpUserIds);
       const longLwp = await longLwpDates(lwpUserIds, monthStart, monthEnd);
       for (const lv of lwpRows) {
-        const weight = isShortLeaveReason(lv.reason) ? SHORT_LEAVE_DAYS : isHalfDayLeave(lv) ? 0.5 : 1;
+        const weight = unpaidLeaveDayWeight(lv);
         const from = new Date(lv.fromDate), to = new Date(lv.toDate);
         const start = from > monthStart ? from : monthStart;
         const end   = to   < monthEnd   ? to   : monthEnd;

@@ -1,6 +1,7 @@
-// Short Leave — a 2-hour leave that costs a quarter-day (0.25) of Casual
-// Leave. Design (2026-07-24, agreed with Gagan):
-//   • Always drawn from CL only.
+// Short Leave — a 2-hour leave that costs a quarter-day (0.25) of leave.
+// Design (2026-07-24, agreed with Gagan):
+//   • Drawn from CL, SL or LWP only (SHORT_LEAVE_TYPE_CODES, admin decision
+//     2026-11-03). LWP docks 0.25 day in payroll — see unpaidLeaveDayWeight.
 //   • Two slots per day: "morning" (first 2h of the shift) or "evening"
 //     (last 2h of the shift). Both use the EMPLOYEE'S OWN shift times, so
 //     the excused window is per-org and per-person, never hardcoded.
@@ -24,8 +25,11 @@ export const SHORT_LEAVE_DAYS = 0.25;
 export const SHORT_LEAVE_MINUTES = 120;
 /** Max short leaves a person may take in one calendar month. */
 export const SHORT_LEAVE_MONTHLY_CAP = 2;
-/** The leave-type code short leave always draws from. */
-export const SHORT_LEAVE_TYPE_CODE = "CL";
+/** Leave types a short leave may draw from. */
+export const SHORT_LEAVE_TYPE_CODES = ["CL", "SL", "LWP"];
+export const isShortLeaveType = (code: string | null | undefined) =>
+  SHORT_LEAVE_TYPE_CODES.includes(String(code ?? "").toUpperCase());
+export const SHORT_LEAVE_TYPE_ERROR = "Short leave can only be taken as Casual Leave, Sick Leave or Leave Without Pay.";
 /** Minimum day length (the shift's full bar, minutes) for a short leave to
  *  be allowed — at least 2h of real work must remain after the 2h excuse.
  *  Blocks e.g. a 2–3h Saturday, allows the 6h Saturday (needs 4h worked). */
@@ -132,4 +136,25 @@ export function resolveShortLeaveDayStatus(opts: {
   }
   if (worked + activeMin >= halfBar) return "half_day";
   return prevStatus; // under half bar — same fallthrough as a normal day
+}
+
+// ── Unpaid-leave pricing (payroll) ───────────────────────────────────────
+// ONE rule for how many LOP days a working day of an approved unpaid leave
+// docks, shared by payroll/generate, payroll/attendance-summary and the exit
+// F&F calc. It used to be copy-pasted in all three and only knew full/half
+// days, so a short leave filed as LWP was charged a full day (Oct 2026).
+// A new partial-day leave shape must be priced HERE.
+type LeaveSpan = { fromDate: Date | string; toDate: Date | string; reason: string | null; totalDays: unknown };
+
+/** Single-date [Half Day]/[First Half]/[Second Half] leave of ≤ 0.5 days. */
+export function isHalfDayLeave(lv: LeaveSpan): boolean {
+  return /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
+    && Number(lv.totalDays) <= 0.5
+    && new Date(lv.fromDate).getTime() === new Date(lv.toDate).getTime();
+}
+
+/** LOP days one working day of an unpaid leave docks: short 0.25, half 0.5, else 1. */
+export function unpaidLeaveDayWeight(lv: LeaveSpan): number {
+  if (isShortLeaveReason(lv.reason)) return SHORT_LEAVE_DAYS;
+  return isHalfDayLeave(lv) ? 0.5 : 1;
 }

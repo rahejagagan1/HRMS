@@ -11,7 +11,7 @@ import EmployeePicker, { type PickerUser } from "@/components/hr/EmployeePicker"
 import HandoffSection from "@/components/hr/HandoffSection";
 import { leaveMinDate, leaveMinDateForType, canBackDateLeave, istTodayPlusIso } from "@/lib/hr/leave-date-rules";
 import { isWorkingDay, type ShiftWorkRule } from "@/lib/hr/shift-working-days";
-import { buildShortLeaveReason, isShortLeaveReason, shortLeaveSlot, type ShortLeaveSlot } from "@/lib/hr/short-leave";
+import { buildShortLeaveReason, isShortLeaveReason, isShortLeaveType, shortLeaveSlot, type ShortLeaveSlot } from "@/lib/hr/short-leave";
 
 // Decode a stored leave reason back into the form's shape + slot + clean note
 // (strips the leading [marker]). Used to pre-fill the Edit form.
@@ -223,6 +223,8 @@ export default function LeaveRequestForm({
   // the earliest selectable date forward — the server enforces the same rule
   // via checkNoticePeriod, this just makes it visible while picking.
   const selectedLeaveType = leaveTypes?.find((t) => t.id === leaveTypeId) ?? null;
+  // Short (2h) is offered only for CL / SL / LWP (or before a type is picked).
+  const shortTypeOk = !selectedLeaveType || isShortLeaveType(selectedLeaveType.code);
   // Floater Leave is date-locked server-side to the optional-holiday
   // calendar (Pongal, Raksha Bandhan, …) — mirror that in the form by
   // swapping the free date pickers for a dropdown of the valid dates.
@@ -493,7 +495,11 @@ export default function LeaveRequestForm({
             <LeaveTypePicker
               leaveTypes={leaveTypes}
               value={leaveTypeId}
-              onChange={setLeaveTypeId}
+              onChange={(id) => {
+                setLeaveTypeId(id);
+                // Short leave is CL / SL / LWP only — drop back to Full Day.
+                if (isShortLeave && !isShortLeaveType(leaveTypes?.find((t) => t.id === id)?.code)) setDayKind("full");
+              }}
             />
           )}
 
@@ -505,11 +511,11 @@ export default function LeaveRequestForm({
               Leave — a floater is always the full optional-holiday day. */}
           {kind === "leave" && !isFloaterType && (
             <div className="space-y-2">
-              <div className="grid grid-cols-3 gap-2">
+              <div className={`grid ${shortTypeOk ? "grid-cols-3" : "grid-cols-2"} gap-2`}>
                 {[
                   { key: "full",  label: "Full Day",   on: dayKind === "full" },
                   { key: "half",  label: "Half Day",   on: isHalfLeave },
-                  { key: "short", label: "Short (2h)", on: isShortLeave },
+                  ...(shortTypeOk ? [{ key: "short", label: "Short (2h)", on: isShortLeave }] : []),
                 ].map((opt) => (
                   <button
                     key={opt.key}

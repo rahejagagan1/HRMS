@@ -13,7 +13,7 @@
 
 import prisma from "@/lib/prisma";
 import { priceMissedSwipes, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
-import { isShortLeaveReason, SHORT_LEAVE_DAYS } from "@/lib/hr/short-leave";
+import { isHalfDayLeave, unpaidLeaveDayWeight } from "@/lib/hr/short-leave";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const num = (v: unknown) => parseFloat(String(v ?? 0)) || 0;
@@ -71,16 +71,10 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
     prisma.attendance.count({ where: { userId: exit.userId, date: { gte: firstDay, lte: lwd }, status: "short_lop" } }),
   ]);
 
-  // Single-date half-day leave test — same rule as payroll/generate, so the
-  // F&F numbers can never drift from the payslip's.
-  const isHalfDayLeave = (lv: { fromDate: Date; toDate: Date; reason: string | null; totalDays: unknown }) =>
-    /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
-    && Number(lv.totalDays) <= 0.5
-    && lv.fromDate.getTime() === lv.toDate.getTime();
-
   // Unpaid (LWP) leave working days within the worked window — same as
   // payroll: shift-aware (working Saturdays count off the employee's OWN
-  // calendar), and a half-day LWP docks 0.5, not a full day.
+  // calendar), priced by the shared unpaidLeaveDayWeight so F&F can never
+  // drift from the payslip.
   const shiftCtx = (await shiftContextForUsers([exit.userId])).get(exit.userId);
   const longLwp = (await longLwpDates([exit.userId], firstDay, lwd)).get(exit.userId);
   const unpaidLeaves = await prisma.leaveApplication.findMany({
@@ -89,7 +83,7 @@ export async function computeExitPendingSalary(exitId: number): Promise<ExitPend
   });
   let unpaidLeaveDays = 0;
   for (const lv of unpaidLeaves) {
-    const perDay = isShortLeaveReason(lv.reason) ? SHORT_LEAVE_DAYS : isHalfDayLeave(lv) ? 0.5 : 1;
+    const perDay = unpaidLeaveDayWeight(lv);
     const start = lv.fromDate > firstDay ? lv.fromDate : firstDay;
     const end = lv.toDate < lwd ? lv.toDate : lwd;
     const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
