@@ -5,7 +5,7 @@ import { normaliseBrandParam } from "@/lib/hr/brand-scope";
 import { readBrandStatus, materializeBrandStatus } from "@/lib/hr/payroll-run-status";
 import { getMonthSalary } from "@/lib/hr/salary-periods";
 import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
-import { isShortLeaveReason, SHORT_LEAVE_DAYS } from "@/lib/hr/short-leave";
+import { isHalfDayLeave, unpaidLeaveDayWeight } from "@/lib/hr/short-leave";
 
 // POST /api/hr/payroll/generate — produce draft payslips for a payroll run.
 // Math model:
@@ -220,13 +220,8 @@ export async function POST(req: NextRequest) {
       },
       select: { userId: true, fromDate: true, toDate: true, reason: true, totalDays: true },
     }) : [];
-    // Single-date half-day leave test — the [Half Day]/[First Half]/[Second
-    // Half] marker with ≤ 0.5 days. Shared by the half-day excuse and the
-    // unpaid-leave (LWP) charge below so both sides price a half as 0.5.
-    const isHalfDayLeave = (lv: { fromDate: Date; toDate: Date; reason: string | null; totalDays: unknown }) =>
-      /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
-      && Number(lv.totalDays) <= 0.5
-      && lv.fromDate.getTime() === lv.toDate.getTime();
+    // Half-day leaves (isHalfDayLeave, shared in lib/hr/short-leave) excuse
+    // the matching half_day row; the LWP charge below prices a half as 0.5.
     const halfLeaveDatesByUser = new Map<number, Set<string>>();
     for (const lv of paidHalfLeaves) {
       if (!isHalfDayLeave(lv)) continue;
@@ -349,10 +344,9 @@ export async function POST(req: NextRequest) {
       const unpaidLeaves = unpaidLeavesByUser.get(s.userId) ?? [];
       let unpaidLeaveDays = 0;
       for (const lv of unpaidLeaves) {
-        // A short-leave LWP ([Short Leave - …], 2h) docks ¼ day; a half-day LWP
-        // docks only its own half — the other half is either
-        // worked (scored via attendance above) or a paid half-leave.
-        const perDay = isShortLeaveReason(lv.reason) ? SHORT_LEAVE_DAYS : isHalfDayLeave(lv) ? 0.5 : 1;
+        // Short-leave LWP docks ¼ day, half-day LWP ½ (the other half is worked
+        // or a paid half-leave), else 1 — one shared rule, unpaidLeaveDayWeight.
+        const perDay = unpaidLeaveDayWeight(lv);
         const start = lv.fromDate > firstDay ? lv.fromDate : firstDay;
         const end   = lv.toDate   < lastDay  ? lv.toDate   : lastDay;
         const cur   = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));

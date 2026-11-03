@@ -9,7 +9,7 @@ import { checkPastDateAllowed, checkNoticePeriod } from "@/lib/hr/leave-date-rul
 import { sendEmail } from "@/lib/email/sender";
 import { pocAssignmentEmail } from "@/lib/email/templates";
 import {
-  isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS,
+  isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, isShortLeaveType, SHORT_LEAVE_TYPE_ERROR,
   SHORT_LEAVE_MONTHLY_CAP, MIN_SHORT_LEAVE_BAR_MIN, type ShortLeaveSlot,
 } from "@/lib/hr/short-leave";
 import { dayBars } from "@/lib/hr/day-rules";
@@ -213,12 +213,15 @@ export async function POST(req: NextRequest) {
     // slot + single-day shape here. The remaining short-leave rules (shift
     // required, monthly cap, 0.25 amount) are enforced further below where
     // the shift + balance are already in hand.
-    // Short leave draws from whatever applicable type the employee chose
-    // (leaveType already resolved + validated above). Here we only enforce
-    // its shape: a valid slot and a single day.
+    // Short leave draws from CL / SL / LWP only (leaveType already resolved
+    // + validated above). Here we enforce that plus its shape: a valid slot
+    // and a single day.
     const shortLeave = wantShortLeave;
     let shortSlot: ShortLeaveSlot | null = null;
     if (shortLeave) {
+      if (!isShortLeaveType(leaveType.code)) {
+        return NextResponse.json({ error: SHORT_LEAVE_TYPE_ERROR }, { status: 400 });
+      }
       shortSlot = shortLeaveSlot(reason);
       if (!shortSlot) {
         return NextResponse.json({ error: "Pick a Morning or Evening slot for the short leave." }, { status: 400 });

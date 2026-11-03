@@ -9,7 +9,7 @@ import { refundLopLwp } from "@/lib/hr/lop-lwp";
 import { isSingleStageApprovalEmployee } from "@/lib/hr/single-stage-approval";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 import {
-  isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, SHORT_LEAVE_MONTHLY_CAP,
+  isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, SHORT_LEAVE_MONTHLY_CAP, isShortLeaveType, SHORT_LEAVE_TYPE_ERROR,
   SHORT_LEAVE_MINUTES, shortLeaveDayState, resolveShortLeaveDayStatus,
 } from "@/lib/hr/short-leave";
 import { dayBars, lateCutoffMinFor } from "@/lib/hr/day-rules";
@@ -239,6 +239,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       const nowHalf  = /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(newReason ?? ""));
       let newTotal: number;
       if (nowShort) {
+        if (!isShortLeaveType(newType.code)) return NextResponse.json({ error: SHORT_LEAVE_TYPE_ERROR }, { status: 400 });
         if (!shortLeaveSlot(newReason)) return NextResponse.json({ error: "Pick a Morning or Evening slot for the short leave." }, { status: 400 });
         if (newFrom.toDateString() !== newTo.toDateString()) return NextResponse.json({ error: "A short leave is for a single day." }, { status: 400 });
         if (!subjectShift?.shift) return NextResponse.json({ error: "Shift not assigned — please contact the HR department." }, { status: 400 });
