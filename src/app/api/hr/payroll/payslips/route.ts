@@ -44,6 +44,11 @@ export async function GET(req: NextRequest) {
     // second step is done — and a run is shared by both brands, so the check
     // is per-brand (marking NB Media paid must not reveal YT Labs slips).
     // Admins always see everything (including drafts) for review.
+    // Fail closed: an undefined userId would make Prisma drop the filter and
+    // return EVERY payslip (session without dbId, or a non-numeric ?userId).
+    if (!runIdParam && !Number.isInteger(userId)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const payslips = await prisma.payslip.findMany({
       where: {
         ...(runIdParam ? { payrollRunId: runIdParam } : { userId }),

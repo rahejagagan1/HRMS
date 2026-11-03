@@ -32,7 +32,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     if (!Number.isFinite(runId)) return NextResponse.json({ error: "Bad runId" }, { status: 400 });
 
     const { run, rows } = await loadExportRows(runId);
-    const runStatus = readBrandStatus(run, brandParam(req)).status;
+    const runStatus = readBrandStatus(run, brandParam(req, session!.user)).status;
     if (runStatus !== "locked" && runStatus !== "paid") {
       return NextResponse.json({ error: `Lock the run first — currently '${runStatus}'` }, { status: 409 });
     }
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // what got paid out. Bookkeeping needs to see the whole picture.
     // Brand split: ?brand=NB Media|YT Labs exports only that brand's
     // employees under that brand's legal entity; no brand => all (legacy).
-    const brand = brandParam(req);
+    const brand = brandParam(req, session!.user);
     const all = filterRowsByBrand(rows, brand);
     if (brand && all.length === 0) {
       return NextResponse.json({ error: `No ${brand} employees in this payroll run.` }, { status: 422 });

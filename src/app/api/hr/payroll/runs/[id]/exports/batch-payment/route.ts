@@ -32,7 +32,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const { run, rows } = await loadExportRows(runId);
     // Brand split: ?brand= exports only that brand's employees; no brand => all.
-    const brand = brandParam(req);
+    const brand = brandParam(req, session!.user);
     // Gate downloads until HR has locked THIS BRAND's run — draft / generated
     // runs can still change, and the bank should never see a half-final batch.
     const runStatus = readBrandStatus(run, brand).status;

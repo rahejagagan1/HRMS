@@ -12,6 +12,7 @@
 
 import prisma from "@/lib/prisma";
 import { decryptPII } from "@/lib/pii-crypto";
+import { resolveBrandScope } from "@/lib/hr/brand-scope";
 import { getMonthSalary, type SalaryComponents } from "@/lib/hr/salary-periods";
 
 // Standard EPFO statutory ceilings — used to compute EPF/EPS wages.
@@ -365,11 +366,16 @@ export const BRAND_SLUG: Record<PayrollBrand, string> = {
   "YT Labs":  "YT-Labs",
 };
 
-// Parse + validate the ?brand= query param. null => no filter (all employees,
-// the legacy behaviour) so existing links keep working.
-export function brandParam(req: Request): PayrollBrand | null {
+// Parse + validate the ?brand= query param, clamped to the viewer's brand
+// scope: all-brands viewers get what they asked for (null => every brand);
+// a single-brand salary viewer is pinned to their own brand whatever the URL
+// says, and a brand-less one gets nothing.
+export function brandParam(req: Request, user: any): PayrollBrand | null {
   const b = new URL(req.url).searchParams.get("brand");
-  return b === "NB Media" || b === "YT Labs" ? b : null;
+  const scope = resolveBrandScope(user, b);
+  if (scope.allBrands) return b === "NB Media" || b === "YT Labs" ? b : null;
+  if (!scope.brand) throw new Error("Payroll export: viewer has no brand scope");
+  return scope.brand as PayrollBrand;
 }
 
 export function filterRowsByBrand(rows: ExportRow[], brand: PayrollBrand | null): ExportRow[] {

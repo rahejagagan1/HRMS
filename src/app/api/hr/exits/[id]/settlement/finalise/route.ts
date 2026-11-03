@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { requireAuth } from "@/lib/api-auth";
+import { requireAuth, canViewSalary } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,8 @@ export const dynamic = "force-dynamic";
 // MANAGE_HR from the caller's designation. Replaced a local legacy copy.
 import { isHRAdmin } from "@/lib/access";
 function canManage(session: any): boolean {
-  return isHRAdmin(session?.user);
+  // F&F amounts are pay data — VIEW_SALARY on top of HR admin.
+  return isHRAdmin(session?.user) && canViewSalary(session?.user);
 }
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

@@ -38,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // Brand split: ?brand= exports only that brand's employees; no brand => all.
     // NOTE: ptState / ptRegisteredLocation below are NB Media's PT registration;
     // YT Labs' PT registration may differ — configure per-entity when known.
-    const brand = brandParam(req);
+    const brand = brandParam(req, session!.user);
     const runStatus = readBrandStatus(run, brand).status;
     if (runStatus !== "locked" && runStatus !== "paid") {
       return NextResponse.json({ error: `Lock the run first — currently '${runStatus}'` }, { status: 409 });
