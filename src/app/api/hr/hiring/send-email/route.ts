@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
+import { canViewSalary } from "@/lib/api-auth";
 import { resolveTemplate } from "@/lib/hr/email-merge";
 import { sendEmail } from "@/lib/email/sender";
 
@@ -35,6 +36,10 @@ export async function POST(req: NextRequest) {
     const templateId = Number(body?.templateId);
     if (!Number.isInteger(templateId)) {
       return NextResponse.json({ error: "templateId required" }, { status: 400 });
+    }
+    // An offer context merges {{ctc}} — salary access only.
+    if (body?.offerLetterId && !canViewSalary(session!.user)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const actorId = await resolveUserId(session);
 

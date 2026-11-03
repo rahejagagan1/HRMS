@@ -1148,3 +1148,10 @@ export function sanitizeLetterHtml(input: string): string {
     selfClosing: ["br", "hr"],
   });
 }
+
+/** True when a template renders pay data — the salary breakup, exit-settlement
+ *  figures, or the F&F / advance-salary custom fields. Generating one needs
+ *  VIEW_SALARY (see letter-templates/[key]/generate). */
+export function isSalaryLetter(bodyHtml: string): boolean {
+  return /\{\{\s*(Salary|ExitSettlement)\.|\{\{\s*CustomAttributes\.(FnFAmount|AdvanceSalary)/i.test(bodyHtml);
+}

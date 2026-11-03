@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
 import { isHRAdmin } from "@/lib/access";
+import { canViewSalary } from "@/lib/api-auth";
 import { sendEmail } from "@/lib/email/sender";
 import { renderOfferLetterDocxAttachment } from "@/lib/offer-letter-from-docx";
 
@@ -23,7 +24,7 @@ const VALID_ACTIONS = new Set(["send", "accept", "decline", "revoke"]);
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { session, errorResponse } = await requireAuth();
   if (errorResponse) return errorResponse;
-  if (!isHRAdmin(session!.user)) {
+  if (!isHRAdmin(session!.user) || !canViewSalary(session!.user)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   try {
@@ -79,7 +80,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { session, errorResponse } = await requireAuth();
   if (errorResponse) return errorResponse;
-  if (!isHRAdmin(session!.user)) {
+  if (!isHRAdmin(session!.user) || !canViewSalary(session!.user)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
