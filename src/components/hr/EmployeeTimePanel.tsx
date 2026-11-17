@@ -10,7 +10,7 @@ import {
 import { fetcher } from "@/lib/swr";
 import { parseAttLoc, type AttLoc } from "@/lib/attendance-location";
 import { isWorkingDay } from "@/lib/hr/shift-working-days";
-import { SHORT_LEAVE_MINUTES } from "@/lib/hr/short-leave";
+import { SHORT_LEAVE_MINUTES, buildShortLeaveReason, isShortLeaveType, type ShortLeaveSlot } from "@/lib/hr/short-leave";
 import HandoffSection from "@/components/hr/HandoffSection";
 import SelectField from "@/components/ui/SelectField";
 import { DateField } from "@/components/ui/date-field";
@@ -584,7 +584,9 @@ export function EmployeeTimePanel({
   // HR-on-behalf Leave and WFH tabs. Picking a half-day collapses the
   // range to a single date and prepends the reason with the marker the
   // backend uses to count as 0.5 days.
-  const [grantDayKind, setGrantDayKind] = useState<"full" | "first_half" | "second_half">("full");
+  const [grantDayKind, setGrantDayKind] = useState<"full" | "first_half" | "second_half" | "short">("full");
+  const [grantShortSlot, setGrantShortSlot] = useState<ShortLeaveSlot>("morning");
+  // "Half" here = any single-day shape (half or short) — pins toDate to fromDate.
   const isGrantHalf = grantDayKind !== "full";
 
   // Handoff Details — POC + Work Status (+ Unavailability for WFH). Same
@@ -599,7 +601,7 @@ export function EmployeeTimePanel({
   // request flow keeps POC required (allowNa stays default-false there).
   const [handoffPocNa,          setHandoffPocNa]          = useState(false);
   const resetHandoff = () => { setHandoffPoc([]); setHandoffWorkStatus(""); setHandoffUnavailability(""); setHandoffPocNa(false); };
-  const [leaveTypes,  setLeaveTypes]    = useState<{ id: number; name: string }[]>([]);
+  const [leaveTypes,  setLeaveTypes]    = useState<{ id: number; name: string; code?: string }[]>([]);
   // Per-type available balance for the target user, keyed by leaveTypeId.
   // available = totalDays - usedDays - pendingDays. Pending MUST be
   // subtracted so the number shown matches what the apply API actually
@@ -613,6 +615,15 @@ export function EmployeeTimePanel({
       if (Array.isArray(d)) setLeaveTypes(d);
     }).catch(() => {});
   }, [isHRAdmin]);
+  // Short (2h): Leave tab only, CL / SL / LWP only (or before a type is
+  // picked) — same rule as the employee form; the server enforces it too.
+  const grantShortOk = leaveModalTab === "leave" && (
+    leaveForm.leaveTypeId === "" ||
+    isShortLeaveType(leaveTypes.find((t) => t.id === leaveForm.leaveTypeId)?.code)
+  );
+  useEffect(() => {
+    if (!grantShortOk && grantDayKind === "short") setGrantDayKind("full");
+  }, [grantShortOk, grantDayKind]);
   // External trigger: the profile-page kebab dispatches
   // "hr:apply-leave-on-behalf" so HR can open the leave modal without
   // first clicking through to the per-row kebab. Only honored for HR
@@ -790,6 +801,7 @@ export function EmployeeTimePanel({
       // API's 0.5-day accounting kicks in.
       const leaveReasonText = leaveForm.reason.trim();
       const leaveReasonOut =
+        grantDayKind === "short"       ? buildShortLeaveReason(grantShortSlot, leaveReasonText) :
         grantDayKind === "first_half"  ? `[First Half] ${leaveReasonText}`  :
         grantDayKind === "second_half" ? `[Second Half] ${leaveReasonText}` :
                                           leaveReasonText;
@@ -2140,6 +2152,7 @@ export function EmployeeTimePanel({
                       { k: "full",        label: "Full Day"    },
                       { k: "first_half",  label: "First Half"  },
                       { k: "second_half", label: "Second Half" },
+                      ...(grantShortOk ? [{ k: "short", label: "Short (2h)" }] : []),
                     ].map((opt) => {
                       const active = grantDayKind === opt.k;
                       return (
@@ -2164,20 +2177,39 @@ export function EmployeeTimePanel({
                       );
                     })}
                   </div>
+                  {grantDayKind === "short" && (
+                    <div className="mt-2 flex gap-1.5">
+                      {(["morning", "evening"] as const).map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => setGrantShortSlot(s)}
+                          className={`h-8 px-3.5 rounded-full border text-[11.5px] font-medium transition-colors ${
+                            grantShortSlot === s
+                              ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF]"
+                              : "bg-white text-slate-600 border-slate-200 hover:border-[#008CFF]/40"
+                          }`}
+                        >
+                          {s === "morning" ? "Morning (first 2h)" : "Evening (last 2h)"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">From</label>
                     <DateField
                       value={leaveForm.fromDate}
-                      onChange={(v) => setLeaveForm((f) => ({ ...f, fromDate: v, toDate: f.toDate < v ? v : f.toDate }))}
+                      onChange={(v) => setLeaveForm((f) => ({ ...f, fromDate: v, toDate: isGrantHalf || f.toDate < v ? v : f.toDate }))}
                       className="mt-1 w-full"
                     />
                   </div>
                   <div>
                     <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">To</label>
                     <DateField
-                      value={leaveForm.toDate}
+                      value={isGrantHalf ? leaveForm.fromDate : leaveForm.toDate}
+                      disabled={isGrantHalf}
                       onChange={(v) => setLeaveForm((f) => ({ ...f, toDate: v }))}
                       className="mt-1 w-full"
                     />

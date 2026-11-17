@@ -2975,11 +2975,12 @@ export default function HRHomePage() {
   // isn't CEO / HR Manager / developer — server enforces the same
   // gate so a hand-crafted POST still 403s.
   const canApplyRestricted = canApplyRestrictedLeave(user);
-  const otherLeaveTypes: { id: number; name: string }[] = Array.isArray(leaveTypesData)
+  const otherLeaveTypes: { id: number; name: string; code?: string }[] = Array.isArray(leaveTypesData)
     ? leaveTypesData
         .filter((t: any) => t.applicable !== false)
         .filter((t: any) => t.adminOnly !== true || canApplyRestricted)
-        .map((t: any) => ({ id: t.id, name: t.name }))
+        // `code` drives the CL/SL/LWP-only Short (2h) option in the form.
+        .map((t: any) => ({ id: t.id, name: t.name, code: t.code }))
     : [];
   const otherTitle: Record<LeaveRequestKind, string> = {
     wfh:        "Request Work From Home",

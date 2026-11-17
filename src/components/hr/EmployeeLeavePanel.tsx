@@ -50,7 +50,7 @@ export default function EmployeeLeavePanel({ userId, userName }: { userId: numbe
 
   const applyable = (Array.isArray(leaveTypes) ? leaveTypes : [])
     .filter((t: any) => t.applicable !== false)
-    .map((t: any) => ({ id: t.id, name: t.name }));
+    .map((t: any) => ({ id: t.id, name: t.name, code: t.code }));
 
   return (
     <>

@@ -10,6 +10,7 @@ import SelectField from "@/components/ui/SelectField";
 import PopupPanel from "@/components/ui/PopupPanel";
 import HandoffSection from "@/components/hr/HandoffSection";
 import type { PickerUser } from "@/components/hr/EmployeePicker";
+import { buildShortLeaveReason, isShortLeaveType, type ShortLeaveSlot } from "@/lib/hr/short-leave";
 
 type LeaveTypeRow = { id: number; name: string; code: string; daysPerYear: number; applicable?: boolean };
 type Bal          = { id: number | null; total: number; used: number; pending: number };
@@ -249,8 +250,11 @@ export default function LeavesAdminPanel(_props: {
   // leave application form). full → standard range; first/second half
   // collapse to one date and tag the reason so attendance reports the
   // correct fraction.
-  const [applyDayKind, setApplyDayKind] = useState<"full" | "first_half" | "second_half">("full");
-  const isApplyHalf = applyDayKind !== "full";
+  const [applyDayKind, setApplyDayKind] = useState<"full" | "first_half" | "second_half" | "short">("full");
+  const [applyShortSlot, setApplyShortSlot] = useState<ShortLeaveSlot>("morning");
+  const isApplyHalf  = applyDayKind === "first_half" || applyDayKind === "second_half";
+  const isApplyShort = applyDayKind === "short";
+  const isApplySingleDay = isApplyHalf || isApplyShort;
   // Employee picker: typed search + outside-click close. Replaces the
   // native <select> which became unwieldy with 60+ active employees.
   const [empQuery, setEmpQuery] = useState("");
@@ -280,6 +284,13 @@ export default function LeavesAdminPanel(_props: {
     () => leaveTypes.filter((t) => t.applicable !== false),
     [leaveTypes],
   );
+  // Short (2h) is leave-only and CL / SL / LWP only (or before a type is
+  // picked) — same rule as the employee form; the server enforces it too.
+  const applyTypeCode = applicableTypes.find((t) => t.id === applyForm.leaveTypeId)?.code;
+  const applyShortOk = applyMode === "leave" && (applyForm.leaveTypeId === "" || isShortLeaveType(applyTypeCode));
+  useEffect(() => {
+    if (!applyShortOk && applyDayKind === "short") setApplyDayKind("full");
+  }, [applyShortOk, applyDayKind]);
   // Live preview of the chosen user's available balance for the chosen type.
   const applyBalancePreview = useMemo(() => {
     if (typeof applyForm.userId !== "number" || typeof applyForm.leaveTypeId !== "number") return null;
@@ -374,10 +385,11 @@ export default function LeavesAdminPanel(_props: {
         // verbatim. The toDate is always pinned to fromDate when half-day.
         const reasonText = applyForm.reason.trim();
         const reasonOut =
+          isApplyShort                   ? buildShortLeaveReason(applyShortSlot, reasonText) :
           applyDayKind === "first_half"  ? `[First Half] ${reasonText}`  :
           applyDayKind === "second_half" ? `[Second Half] ${reasonText}` :
                                             reasonText;
-        const toDateOut = isApplyHalf ? applyForm.fromDate : applyForm.toDate;
+        const toDateOut = isApplySingleDay ? applyForm.fromDate : applyForm.toDate;
         res = await fetch("/api/hr/leaves", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -954,6 +966,7 @@ export default function LeavesAdminPanel(_props: {
                       { k: "full",         label: "Full Day"    },
                       { k: "first_half",   label: "First Half"  },
                       { k: "second_half",  label: "Second Half" },
+                      ...(applyShortOk ? [{ k: "short", label: "Short (2h)" }] : []),
                     ].map((opt) => {
                       const active = applyDayKind === opt.k;
                       return (
@@ -979,6 +992,24 @@ export default function LeavesAdminPanel(_props: {
                       );
                     })}
                   </div>
+                  {isApplyShort && (
+                    <div className="mt-2 flex gap-1.5">
+                      {(["morning", "evening"] as const).map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => setApplyShortSlot(s)}
+                          className={`h-8 px-3.5 rounded-full border text-[11.5px] font-medium transition-colors ${
+                            applyShortSlot === s
+                              ? "border-[#008CFF] bg-[#008CFF]/[0.06] text-[#008CFF]"
+                              : "bg-white text-slate-600 border-slate-200 hover:border-[#008CFF]/40"
+                          }`}
+                        >
+                          {s === "morning" ? "Morning (first 2h)" : "Evening (last 2h)"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -994,7 +1025,7 @@ export default function LeavesAdminPanel(_props: {
                       ...f,
                       fromDate: v,
                       // Half-day always pins toDate to fromDate.
-                      toDate: isApplyHalf ? v : (!f.toDate || new Date(v) > new Date(f.toDate) ? v : f.toDate),
+                      toDate: isApplySingleDay ? v : (!f.toDate || new Date(v) > new Date(f.toDate) ? v : f.toDate),
                     }))}
                     className="mt-1 w-full"
                   />
@@ -1002,8 +1033,8 @@ export default function LeavesAdminPanel(_props: {
                 <div>
                   <label className="text-[10.5px] font-bold uppercase tracking-wider text-slate-500">To date</label>
                   <DateField
-                    value={isApplyHalf ? applyForm.fromDate : applyForm.toDate}
-                    disabled={isApplyHalf}
+                    value={isApplySingleDay ? applyForm.fromDate : applyForm.toDate}
+                    disabled={isApplySingleDay}
                     onChange={(v) => setApplyForm((f) => ({ ...f, toDate: v }))}
                     className="mt-1 w-full"
                   />
