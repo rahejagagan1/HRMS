@@ -251,6 +251,8 @@ export default function LeaveRequestForm({
   );
   const minDate = kind === "leave"
     ? leaveMinDateForType(me, selectedLeaveType?.code, { shortLeave: isShortLeave })
+    : kind === "wfh"
+      ? leaveMinDateForType(me, "WFH")
     : kind === "regularize"
       ? (canBackDateLeave(me) || regUnlimitedPolicy?.enabled === true || regWindowPolicy?.enabled === false
           ? undefined
@@ -275,7 +277,7 @@ export default function LeaveRequestForm({
   // mode must never rewrite the filed dates behind the user's back, and a
   // regularization's prefilled past date must never be bumped forward.
   useEffect(() => {
-    if (isEdit || kind !== "leave" || !minDate) return;
+    if (isEdit || (kind !== "leave" && kind !== "wfh") || !minDate) return;
     if (fromDate && fromDate < minDate) {
       setFromDate(minDate);
       if (!toDate || toDate < minDate) setToDate(minDate);
