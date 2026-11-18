@@ -67,7 +67,9 @@ export function leaveMinDate(user: any): string | undefined {
  * more types can join by adding a line. Casual Leave = 2 days: leave starting
  * Thursday must be filed by Tuesday.
  */
-export const NOTICE_DAYS_BY_TYPE: Record<string, number> = { CL: 2 };
+// "WFH" is not a LeaveType code — the WFH route passes it so Work From Home
+// shares the same 2-day notice rule + exemptions (2026-11-18).
+export const NOTICE_DAYS_BY_TYPE: Record<string, number> = { CL: 2, WFH: 2 };
 
 /** IST today + n calendar days, as YYYY-MM-DD. */
 export function istTodayPlusIso(days: number): string {

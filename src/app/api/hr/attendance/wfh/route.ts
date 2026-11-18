@@ -4,7 +4,7 @@ import { requireAuth, resolveUserId, serverError } from "@/lib/api-auth";
 import { notifyApprovers, notifyUsers, brandCeoIdForEmployee, brandScopedFinalApprovers } from "@/lib/notifications";
 import { istDateOnlyFrom, istMonthRange } from "@/lib/ist-date";
 import { stringifyAttLoc } from "@/lib/attendance-location";
-import { checkPastDateAllowed } from "@/lib/hr/leave-date-rules";
+import { checkPastDateAllowed, checkNoticePeriod } from "@/lib/hr/leave-date-rules";
 import { isWorkingDay } from "@/lib/hr/shift-working-days";
 import { sendEmail } from "@/lib/email/sender";
 import { pocAssignmentEmail } from "@/lib/email/templates";
@@ -74,6 +74,10 @@ export async function POST(req: NextRequest) {
     // / isDeveloper bypass via canApplyRestrictedLeave.
     const pastErr = checkPastDateAllowed(date, self);
     if (pastErr) return NextResponse.json({ error: pastErr }, { status: 400 });
+    // 2 days' advance notice, same as Casual Leave. HR dept / CEO / dev
+    // (canBackDateLeave) are exempt, so on-behalf grants still work.
+    const noticeErr = checkNoticePeriod(date, self, "WFH", { typeName: "Work From Home" });
+    if (noticeErr) return NextResponse.json({ error: noticeErr }, { status: 400 });
 
     // HR on-behalf: when targetUserId is set and the caller is HR-admin,
     // the WFH is created for that user instead of the caller. forceGrant
