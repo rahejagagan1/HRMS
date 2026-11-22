@@ -419,6 +419,9 @@ export function hrLateSummaryEmail(args: {
   today: Date;
   absent: Array<{ name: string; department: string | null }>;
   late:   Array<{ name: string; department: string | null; clockIn: Date | null }>;
+  /** Named lists. `detail` is the part of the day (plus type, for leave). */
+  onLeave: Array<{ name: string; department: string | null; detail: string; status: string }>;
+  wfh:     Array<{ name: string; department: string | null; detail: string; status: string }>;
   totals: { absent: number; late: number; onTime: number; onLeave: number };
   /** Optional label shown in the header ("Daily Attendance · <fireTimeLabel>")
    *  and the text-version preamble. Defaults to "10:05 AM IST" to preserve
@@ -461,11 +464,12 @@ export function hrLateSummaryEmail(args: {
   // No avatars (broke on Gmail mobile), no alternating stripes (looked
   // busy with the toned-down palette). Just clean rows with a hairline
   // divider between them.
-  const renderRow = (name: string, department: string | null, right: string) => `
+  const renderRow = (name: string, department: string | null, right: string, detail?: string) => `
     <tr>
       <td valign="middle" style="padding:11px 0;border-bottom:1px solid #eef2f7;font-family:${FONT}">
         <div style="font-size:13.5px;color:#0f172a;font-weight:600;line-height:1.3">${escape(name)}</div>
         ${department ? `<div style="margin-top:2px;font-size:11.5px;color:#94a3b8">${escape(department)}</div>` : ""}
+        ${detail ? `<div style="margin-top:2px;font-size:11.5px;color:#475569">${escape(detail)}</div>` : ""}
       </td>
       <td valign="middle" align="right" style="padding:11px 0;border-bottom:1px solid #eef2f7;white-space:nowrap;font-family:${FONT};font-size:12px;color:#475569;font-weight:600">${right}</td>
     </tr>`;
@@ -492,6 +496,11 @@ export function hrLateSummaryEmail(args: {
   const lateRows = args.late.map((r) => renderRow(r.name, r.department,
     `<span style="color:#ea580c">${fmtTime(r.clockIn)}</span>`,
   )).join("");
+  const requestRows = (rows: typeof args.onLeave) =>
+    rows.map((r) => renderRow(r.name, r.department, escape(r.status), r.detail)).join("");
+  const requestText = (rows: typeof args.onLeave) => rows.length
+    ? rows.map((r) => `  • ${r.name}${r.department ? ` — ${r.department}` : ""} · ${r.detail} · ${r.status}`)
+    : ["  (none)"];
 
   const link = `${appUrl()}/dashboard/hr/admin?tab=attendance-dashboard`;
   const body = `
@@ -511,6 +520,8 @@ export function hrLateSummaryEmail(args: {
 
     ${renderSection("Absent · no clock-in, no leave", "#dc2626", args.absent.length, absentRows, "Nobody absent today.")}
     ${renderSection(`Late · clocked in after ${cutoffLabel}`, "#ea580c", args.late.length, lateRows, "Everyone clocked in on time.")}
+    ${renderSection("On leave", "#7c3aed", args.onLeave.length, requestRows(args.onLeave), "Nobody on leave today.")}
+    ${renderSection("Working from home", "#0284c7", args.wfh.length, requestRows(args.wfh), "Nobody working from home today.")}
 
     <!-- CTA: simple inline link button. -->
     <div style="margin-top:28px;border-top:1px solid #e2e8f0;padding-top:18px">
@@ -520,8 +531,8 @@ export function hrLateSummaryEmail(args: {
     <!-- Quiet footer note. -->
     <p style="font-family:${FONT};margin:18px 0 0;font-size:11px;color:#94a3b8;line-height:1.55">
       WFH and On-Duty employees are expected to clock in — they appear in Absent if they haven't.
-      Anyone with an active leave application (any non-rejected status) is excluded.
-      Weekends and holidays don't generate this email.
+      Anyone with leave today, including half-day, short and pending leave, is listed under On leave and is not marked absent or late.
+      Off days and holidays don't generate this email.
     </p>`;
 
   const textRows = [
@@ -534,9 +545,74 @@ export function hrLateSummaryEmail(args: {
     `LATE (${args.totals.late}) — clocked in after ${cutoffLabel}`,
     ...(args.late.length ? args.late.map((r) => `  • ${r.name}${r.department ? ` — ${r.department}` : ""} · ${fmtTime(r.clockIn)}`) : ["  (none)"]),
     ``,
+    `ON LEAVE (${args.onLeave.length})`,
+    ...requestText(args.onLeave),
+    ``,
+    `WORKING FROM HOME (${args.wfh.length})`,
+    ...requestText(args.wfh),
+    ``,
     `Open: ${link}`,
   ];
   return { subject, html: SHELL(`Attendance — ${fmtDate(args.today)}`, body), text: textRows.join("\n") };
+}
+
+// ── Manager "your team today" email ────────────────────────────────────
+// Sent alongside the HR summary, to each reporting manager, about their
+// direct reports only. Empty sections are left out, and the word "absent"
+// is never used: no request + no punch is just "Not clocked in".
+export function teamAttendanceEmail(args: {
+  today: Date;
+  /** When the snapshot was taken — arrivals after this aren't reflected. */
+  asOf: Date;
+  managerName: string;
+  notClockedIn: Array<{ name: string; detail?: string }>;
+  late:    Array<{ name: string; clockIn: Date | null }>;
+  onLeave: Array<{ name: string; detail: string; status: string }>;
+  wfh:     Array<{ name: string; detail: string; status: string }>;
+}): EmailContent {
+  const time = (d: Date | null) =>
+    d ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }) : "—";
+  const sections = [
+    { title: "Not clocked in",    color: "#dc2626", rows: args.notClockedIn.map((r) => ({ name: r.name, info: r.detail ?? "" })) },
+    { title: "Late",              color: "#ea580c", rows: args.late.map((r) => ({ name: r.name, info: `Clocked in at ${time(r.clockIn)}` })) },
+    { title: "On leave",          color: "#7c3aed", rows: args.onLeave.map((r) => ({ name: r.name, info: `${r.detail} · ${r.status}` })) },
+    { title: "Working from home", color: "#0284c7", rows: args.wfh.map((r) => ({ name: r.name, info: `${r.detail} · ${r.status}` })) },
+  ].filter((s) => s.rows.length > 0);
+
+  const heading = `Team attendance — ${fmtDate(args.today)}`;
+  const subject = `${heading} · ${sections.map((s) => `${s.rows.length} ${s.title.toLowerCase()}`).join(" · ")}`;
+  const intro   = `Hi ${args.managerName}, here is your team as of ${time(args.asOf)} IST.`;
+  // No dashboard button on purpose: many reporting managers don't have the
+  // My Team tab, so the link would land on a blocked page.
+  const note    = "This covers only the people who report directly to you. Clock-ins and requests made after this time are not included.";
+
+  const body = `
+    <p style="margin:0;font-size:14px;line-height:1.6">${escape(intro)}</p>
+    ${sections.map((s) => `
+      <h3 style="margin:22px 0 4px;font-size:12px;color:${s.color};text-transform:uppercase;letter-spacing:0.08em">${s.title} (${s.rows.length})</h3>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">
+        ${s.rows.map((r) => `
+          <tr>
+            <td style="padding:9px 0;border-bottom:1px solid #eef2f7">
+              <div style="font-size:13.5px;color:#0f172a;font-weight:600">${escape(r.name)}</div>
+              ${r.info ? `<div style="margin-top:2px;font-size:12px;color:#475569">${escape(r.info)}</div>` : ""}
+            </td>
+          </tr>`).join("")}
+      </table>`).join("")}
+    <p style="margin:18px 0 0;font-size:11px;color:#94a3b8;line-height:1.55">${note}</p>`;
+
+  const text = [
+    intro,
+    ...sections.flatMap((s) => [
+      "",
+      `${s.title.toUpperCase()} (${s.rows.length})`,
+      ...s.rows.map((r) => `  • ${r.name}${r.info ? ` · ${r.info}` : ""}`),
+    ]),
+    "",
+    note,
+  ].join("\n");
+
+  return { subject, html: SHELL(heading, body), text };
 }
 
 export function reportSubmittedEmail(args: {

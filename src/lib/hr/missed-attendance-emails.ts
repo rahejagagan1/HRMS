@@ -1,10 +1,32 @@
 import prisma from "@/lib/prisma";
 import { sendEmail } from "@/lib/email/sender";
-import { attendanceReminderEmail, hrLateSummaryEmail } from "@/lib/email/templates";
+import { attendanceReminderEmail, hrLateSummaryEmail, teamAttendanceEmail } from "@/lib/email/templates";
+import { buildTeamDigests } from "@/lib/hr/team-attendance";
 import { istTodayDateOnly, istTimeOnDate } from "@/lib/ist-date";
 import { getPoliciesByUser } from "@/lib/hr/notification-policy";
 import { isEmailEnabled, devEmailRecipientsClause } from "@/lib/email/toggles";
 import { isWorkingDayForShift } from "@/lib/hr/day-rules";
+import { isShortLeaveReason, shortLeaveSlot } from "@/lib/hr/short-leave";
+import { wfhDayKind, wfhKindLabel } from "@/lib/hr/wfh-day-kind";
+
+/** Which part of the day a leave covers, from its reason marker. */
+function leaveShapeLabel(reason: string): string {
+  if (isShortLeaveReason(reason)) {
+    const slot = shortLeaveSlot(reason);
+    return slot ? `Short leave, ${slot}` : "Short leave";
+  }
+  if (/^\s*\[first half\]/i.test(reason))  return "First half";
+  if (/^\s*\[second half\]/i.test(reason)) return "Second half";
+  if (/^\s*\[half day\]/i.test(reason))    return "Half day";
+  return "Full day";
+}
+
+/** One status for all of a person's requests that day — least-approved wins. */
+function requestStatusLabel(statuses: string[]): string {
+  if (statuses.includes("pending")) return "Pending";
+  if (statuses.includes("partially_approved")) return "Final approval pending";
+  return "Approved";
+}
 
 /**
  * Comma-separated env var of emails who should never receive attendance
@@ -148,6 +170,10 @@ export async function sendMissedClockInReminders(): Promise<number> {
  *     those folks are expected to clock in too), or
  *   • clocked in AFTER 10:00 IST (late).
  *
+ * The same run also emails each reporting manager about their direct
+ * reports (not clocked in / late / leave / WFH). Managers hear about
+ * leave-only days; the HR + CEO email still needs someone absent or late.
+ *
  * Returns 1 when an email was sent, 0 when there's nothing to report
  * (or it's a weekend / holiday — same skip rules as the employee mail).
  *
@@ -205,7 +231,7 @@ export async function sendHrLateClockInSummary(
   // default cutoff stays as the safety net.
   const defaultCutoffIst = istTimeOnDate(today, opts.lateCutoffHour ?? 10, opts.lateCutoffMin ?? 0);
 
-  const [users, todays, leaves, userShifts] = await Promise.all([
+  const [users, todays, leaves, wfhs, onDuty, userShifts] = await Promise.all([
     // Exclude exited employees whose isActive was never flipped (past
     // last-working-day exit) so leavers stop appearing in the absent roster.
     prisma.user.findMany({
@@ -228,6 +254,14 @@ export async function sendHrLateClockInSummary(
         fromDate: { lte: today },
         toDate:   { gte: today },
       },
+      select: { userId: true, reason: true, status: true, leaveType: { select: { name: true } } },
+    }),
+    prisma.wFHRequest.findMany({
+      where:  { date: today, status: { notIn: ["rejected", "cancelled"] } },
+      select: { userId: true, reason: true, status: true },
+    }),
+    prisma.onDutyRequest.findMany({
+      where:  { date: today, status: { notIn: ["rejected", "cancelled"] } },
       select: { userId: true },
     }),
     // Each user's assigned shift — drives BOTH the per-user late cutoff
@@ -279,6 +313,8 @@ export async function sendHrLateClockInSummary(
   };
   const absent: Row[] = [];
   const late:   Row[] = [];
+  // Everyone due in today. Absent + late + on time always adds up to this.
+  const expected: typeof users = [];
 
   // Bucket NULL businessUnit as NB Media — matches the parent-brand
   // fallback used everywhere else.
@@ -295,6 +331,7 @@ export async function sendHrLateClockInSummary(
     // Brand filter — when opts.brand is set, skip employees of other
     // brands so the roster only contains the brand we're sending to.
     if (opts.brand && buOf(u) !== opts.brand) continue;
+    expected.push(u);
     const rec = attByUser.get(u.id);
     if (!rec?.clockIn) {
       absent.push({ userId: u.id, managerId: u.managerId, businessUnit: buOf(u), name: u.name, department: u.employeeProfile?.department ?? null, status: "absent", clockIn: null });
@@ -309,8 +346,8 @@ export async function sendHrLateClockInSummary(
     }
   }
 
-  if (absent.length === 0 && late.length === 0) return 0;
-
+  // No early return when absent + late are empty: managers still hear about
+  // leave / WFH. The HR and CEO loops below each skip such a day themselves.
   absent.sort((a, b) => a.name.localeCompare(b.name));
   late.sort((a, b) => (a.clockIn!.getTime() - b.clockIn!.getTime()));
 
@@ -336,7 +373,7 @@ export async function sendHrLateClockInSummary(
       ],
     },
     select: {
-      email: true, name: true, orgLevel: true, role: true,
+      id: true, email: true, name: true, orgLevel: true, role: true,
       employeeProfile: { select: { businessUnit: true } },
     },
   });
@@ -351,13 +388,52 @@ export async function sendHrLateClockInSummary(
     if (await isEmailEnabledForRoles("missed_attendance", roles)) filteredRecipients.push(r);
   }
 
-  // Per-brand denominator helper — reused for HR-recipient + CEO digests.
-  const brandTotals = (brand: string) => {
-    const candidates = users.filter((u) =>
-      buOf(u) === brand && !!u.email && !excluded.has(u.email!.toLowerCase()) && !onLeaveIds.has(u.id),
-    ).length;
-    const onLeave = users.filter((u) => buOf(u) === brand && onLeaveIds.has(u.id)).length;
-    return { candidates, onLeave };
+  // Leave + WFH name lists, shared by the HR, CEO and manager emails.
+  // One row per person, even with two requests on the same day.
+  const usersByName = [...users].sort((a, b) => a.name.localeCompare(b.name));
+  const personOf = (u: typeof users[number]) => ({
+    userId:       u.id,
+    managerId:    u.managerId,
+    businessUnit: buOf(u),
+    name:         u.name,
+    department:   u.employeeProfile?.department ?? null,
+  });
+  const leaveRows = usersByName.flatMap((u) => {
+    const own = leaves.filter((l) => l.userId === u.id);
+    if (own.length === 0) return [];
+    return [{
+      ...personOf(u),
+      detail: own.map((l) => `${leaveShapeLabel(l.reason)}, ${l.leaveType.name}`).join(" + "),
+      status: requestStatusLabel(own.map((l) => l.status)),
+    }];
+  });
+  const wfhRows = usersByName.flatMap((u) => {
+    const own = wfhs.filter((w) => w.userId === u.id);
+    if (own.length === 0) return [];
+    return [{
+      ...personOf(u),
+      detail: wfhKindLabel(wfhDayKind(own.map((w) => w.reason))) ?? "Full day",
+      status: requestStatusLabel(own.map((w) => w.status)),
+    }];
+  });
+
+  // Per-brand totals + name lists — reused for HR-recipient + CEO digests.
+  const brandSummary = (brand: string) => {
+    const onLeave = leaveRows.filter((r) => r.businessUnit === brand);
+    const wfh     = wfhRows.filter((r) => r.businessUnit === brand);
+    const absentCount = absent.filter((r) => r.businessUnit === brand).length;
+    const lateCount   = late.filter((r) => r.businessUnit === brand).length;
+    const dueIn       = expected.filter((u) => buOf(u) === brand).length;
+    return {
+      onLeave,
+      wfh,
+      totals: {
+        absent:  absentCount,
+        late:    lateCount,
+        onTime:  dueIn - absentCount - lateCount,
+        onLeave: onLeave.length,
+      },
+    };
   };
 
   let sent = 0;
@@ -373,17 +449,11 @@ export async function sendHrLateClockInSummary(
     const brandAbsent = absent.filter((row) => row.businessUnit === brand);
     const brandLate   = late.filter((row)   => row.businessUnit === brand);
     if (brandAbsent.length === 0 && brandLate.length === 0) continue;
-    const { candidates, onLeave } = brandTotals(brand);
     const brandContent = hrLateSummaryEmail({
       today,
       absent: brandAbsent,
       late:   brandLate,
-      totals: {
-        absent:  brandAbsent.length,
-        late:    brandLate.length,
-        onTime:  Math.max(0, candidates - brandAbsent.length - brandLate.length),
-        onLeave,
-      },
+      ...brandSummary(brand),
       fireTimeLabel: opts.fireTimeLabel,
       cutoffLabel:   opts.cutoffLabel,
     });
@@ -420,13 +490,11 @@ export async function sendHrLateClockInSummary(
     const ceoAbsent = absent.filter((r) => r.businessUnit === ceoBrand);
     const ceoLate   = late.filter((r) => r.businessUnit === ceoBrand);
     if (ceoAbsent.length === 0 && ceoLate.length === 0) continue;
-    const { candidates: ceoCandidates, onLeave: ceoOnLeave } = brandTotals(ceoBrand);
-    const ceoOnTime = Math.max(0, ceoCandidates - ceoAbsent.length - ceoLate.length);
     const ceoContent = hrLateSummaryEmail({
       today,
       absent: ceoAbsent,
       late:   ceoLate,
-      totals: { absent: ceoAbsent.length, late: ceoLate.length, onTime: ceoOnTime, onLeave: ceoOnLeave },
+      ...brandSummary(ceoBrand),
       fireTimeLabel: opts.fireTimeLabel,
       cutoffLabel:   opts.cutoffLabel,
     });
@@ -435,6 +503,42 @@ export async function sendHrLateClockInSummary(
       sent++;
     } catch (e) {
       console.error(`[hr-late-summary] CEO ${ceo.email}:`, e);
+    }
+  }
+
+  // Manager digest — direct reports only. Whoever is on this brand's company
+  // email (HR + CEO) is skipped, so nobody gets a second, team-only copy.
+  // Like the CEO loop, only the global toggle applies, not the per-role one.
+  const getsCompanyEmail = new Set(
+    [...filteredRecipients, ...ceos]
+      .filter((r) => !opts.brand || (r.employeeProfile?.businessUnit || "NB Media") === opts.brand)
+      .map((r) => r.id),
+  );
+  // `users` is active + not exited, so an inactive manager never resolves.
+  const userById = new Map(users.map((u) => [u.id, u]));
+  // absent / late are already working-day + brand scoped. Leave + WFH aren't:
+  // without this, a Fri–Mon leave would email the manager on Sunday.
+  const dueToday = (r: { userId: number; businessUnit: string }) =>
+    (!opts.brand || r.businessUnit === opts.brand) && isWorkingToday(r.userId);
+  const onDutyIds = new Set(onDuty.map((o) => o.userId));
+  const teams = buildTeamDigests(
+    {
+      noClockIn: absent.map((r) => ({ ...r, detail: onDutyIds.has(r.userId) ? "On duty applied" : undefined })),
+      late,
+      onLeave:   leaveRows.filter(dueToday),
+      wfh:       wfhRows.filter(dueToday),
+    },
+    (id) => !!userById.get(id)?.email && !getsCompanyEmail.has(id),
+  );
+  const asOf = new Date();
+  for (const [managerId, team] of teams) {
+    const manager = userById.get(managerId)!;
+    try {
+      const content = teamAttendanceEmail({ today, asOf, managerName: manager.name, ...team });
+      await sendEmail({ to: manager.email!, content });
+      sent++;
+    } catch (e) {
+      console.error(`[team-attendance] ${manager.email}:`, e);
     }
   }
 
