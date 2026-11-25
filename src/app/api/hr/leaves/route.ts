@@ -10,7 +10,7 @@ import { sendEmail } from "@/lib/email/sender";
 import { pocAssignmentEmail } from "@/lib/email/templates";
 import {
   isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, isShortLeaveType, SHORT_LEAVE_TYPE_ERROR,
-  SHORT_LEAVE_MONTHLY_CAP, MIN_SHORT_LEAVE_BAR_MIN, type ShortLeaveSlot,
+  SHORT_LEAVE_MONTHLY_CAP, MIN_SHORT_LEAVE_BAR_MIN, type ShortLeaveSlot, sameDayLeaveConflict,
 } from "@/lib/hr/short-leave";
 import { dayBars } from "@/lib/hr/day-rules";
 import { istMonthRange } from "@/lib/ist-date";
@@ -404,27 +404,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Overlap guard. A plain date-range overlap isn't always a real clash:
-    // a First-Half and a Second-Half leave on the SAME calendar day are
-    // complementary, not overlapping. The half is encoded as a "[First Half]"
-    // / "[Second Half]" marker in the reason (no dedicated column), so we
-    // parse it to let the two halves of one day coexist while still blocking
-    // every genuine overlap (full days, duplicate halves, multi-day ranges,
-    // generic [Half Day] which carries no specific half).
-    // A day-segment for each booking: full day, first/second half, or a
-    // short-leave morning/evening slot. Two single-day bookings only coexist
-    // when their segments are non-overlapping complements — {first,second}
-    // or {sl-morning,sl-evening}. So an employee can take BOTH a morning and
-    // an evening short leave on the same day, but a short leave never stacks
-    // onto a half/full-day leave (or a duplicate slot).
-    const segOf = (txt: string | null | undefined): "full" | "first" | "second" | "sl-morning" | "sl-evening" => {
-      if (isShortLeaveReason(txt)) return shortLeaveSlot(txt) === "evening" ? "sl-evening" : "sl-morning";
-      const m = /^\s*\[(First Half|Second Half)\]/i.exec(String(txt ?? ""));
-      if (m) return /first/i.test(m[1]) ? "first" : "second";
-      return "full";
-    };
-    const COMPLEMENTS = new Set(["first|second", "second|first", "sl-morning|sl-evening", "sl-evening|sl-morning"]);
-    const newSeg = segOf(reason);
-    const newSingleDay = from.toDateString() === to.toDateString();
+    // non-overlapping segments of one date (two halves, two short-leave
+    // slots, a half + the short leave in the OTHER half) may coexist — the
+    // shared rule lives in sameDayLeaveConflict (edit route uses it too).
     const overlaps = await prisma.leaveApplication.findMany({
       // Include "partially_approved" — a leave that's cleared L1 but not yet L2
       // is still a live booking. Omitting it left a blind spot where a second
@@ -433,22 +415,11 @@ export async function POST(req: NextRequest) {
       where: { userId: subjectUserId, status: { in: ["pending", "partially_approved", "approved"] }, fromDate: { lte: to }, toDate: { gte: from } },
       select: { fromDate: true, toDate: true, reason: true },
     });
-    const realConflict = overlaps.some((o) => {
-      const oSeg = segOf(o.reason);
-      const oSingleDay = new Date(o.fromDate).toDateString() === new Date(o.toDate).toDateString();
-      const sameDate = new Date(o.fromDate).toDateString() === from.toDateString();
-      // Complementary segments on the same single day → not a conflict.
-      if (newSingleDay && oSingleDay && sameDate && COMPLEMENTS.has(`${newSeg}|${oSeg}`)) {
-        return false;
-      }
-      return true;
-    });
-    if (realConflict) {
-      return NextResponse.json(
-        { error: shortLeave ? "You already have leave booked for this slot / day." : "Overlapping leave exists" },
-        { status: 400 },
-      );
-    }
+    const conflict = sameDayLeaveConflict(
+      { fromDate: from, toDate: to, reason }, overlaps,
+      subjectShift?.shift ? dayBars(from, subjectShift.shift as any).half : null,
+    );
+    if (conflict) return NextResponse.json({ error: conflict }, { status: 400 });
 
     // Every leave starts as "pending" — including HR applying on behalf
     // of someone else. The on-behalf path used to auto-approve, but HR

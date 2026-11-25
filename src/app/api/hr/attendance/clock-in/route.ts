@@ -185,8 +185,13 @@ export async function POST(req: NextRequest) {
         where: { userId, date: today, status: { notIn: ["rejected", "cancelled"] } },
         select: { id: true, reason: true },
       }),
+      // Only a FIRST-HALF leave matters here — filtered so a short leave on
+      // the same day (half + short combo) can't be the row findFirst returns.
       prisma.leaveApplication.findFirst({
-        where: { userId, fromDate: { lte: today }, toDate: { gte: today }, status: { in: ["approved", "partially_approved", "pending"] } },
+        where: {
+          userId, fromDate: { lte: today }, toDate: { gte: today }, status: { in: ["approved", "partially_approved", "pending"] },
+          reason: { contains: "First Half", mode: "insensitive" },
+        },
         select: { reason: true },
       }),
       // A MORNING short leave excuses the first 2h — the late cutoff shifts by

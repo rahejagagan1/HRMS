@@ -239,7 +239,7 @@ export async function POST(req: NextRequest) {
         status = resolveShortLeaveDayStatus({
           worked: totalMinutes, fullBar: fullBarMin, halfBar: halfBarMin,
           activeMin: slState.activeMin, rejectedMin: slState.rejectedMin,
-          prevStatus: existing.status,
+          prevStatus: existing.status, halfLeave: slState.halfLeaveActive,
         });
         // Cosmetic-LATE repair: a MORNING short leave moves the late cutoff
         // by 2h — if the clock-in was inside the shifted window, a "late"

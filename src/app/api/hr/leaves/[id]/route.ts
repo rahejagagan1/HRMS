@@ -10,7 +10,7 @@ import { isSingleStageApprovalEmployee } from "@/lib/hr/single-stage-approval";
 import { can, hasResolvedPermissions } from "@/lib/permissions/can";
 import {
   isShortLeaveReason, shortLeaveSlot, SHORT_LEAVE_DAYS, SHORT_LEAVE_MONTHLY_CAP, isShortLeaveType, SHORT_LEAVE_TYPE_ERROR,
-  SHORT_LEAVE_MINUTES, shortLeaveDayState, resolveShortLeaveDayStatus,
+  SHORT_LEAVE_MINUTES, shortLeaveDayState, resolveShortLeaveDayStatus, sameDayLeaveConflict,
 } from "@/lib/hr/short-leave";
 import { dayBars, lateCutoffMinFor } from "@/lib/hr/day-rules";
 import { checkNoticePeriod } from "@/lib/hr/leave-date-rules";
@@ -83,7 +83,7 @@ async function settleShortLeaveDay(userId: number, dateOnly: Date): Promise<void
     worked: row.totalMinutes ?? 0,
     fullBar: bars.full, halfBar: bars.half,
     activeMin: state.activeMin, rejectedMin: state.rejectedMin,
-    prevStatus: row.status,
+    prevStatus: row.status, halfLeave: state.halfLeaveActive,
   });
   // Cosmetic-LATE repair: an approved MORNING short leave moves the late
   // cutoff by 2h/slot — if the actual clock-in was inside that shifted
@@ -264,6 +264,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         }
       }
 
+      // Same overlap guard as apply — an edit used to skip it, so moving a
+      // pending leave's date could stack it onto another booking.
+      const conflict = sameDayLeaveConflict(
+        { fromDate: newFrom, toDate: newTo, reason: newReason },
+        await prisma.leaveApplication.findMany({
+          where: { userId: application.userId, id: { not: appId }, status: { in: ["pending", "partially_approved", "approved"] }, fromDate: { lte: newTo }, toDate: { gte: newFrom } },
+          select: { fromDate: true, toDate: true, reason: true },
+        }),
+        subjectShift?.shift ? dayBars(newFrom, subjectShift.shift as any).half : null,
+      );
+      if (conflict) return NextResponse.json({ error: conflict }, { status: 400 });
+
       const oldTotal = parseFloat(application.totalDays.toString()) || 0;
 
       try {
@@ -379,7 +391,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
       // A rejected SHORT leave changes the day's price: worked ≥ (bar − 2h)
       // but < bar drops from the provisional full-pay to a ¼-day penalty.
-      if (isShortLv) {
+      // A rejected HALF leave on a half + short day re-settles too (the bar
+      // goes back to the full day); a no-op when the date has no short leave.
+      if (isShortLv || isHalfDay) {
         await settleShortLeaveDay(application.userId, new Date(application.fromDate));
       }
 
