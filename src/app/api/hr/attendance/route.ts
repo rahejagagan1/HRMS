@@ -3,7 +3,7 @@ import prisma from "@/lib/prisma";
 import { requireAuth, isHRAdmin, serverError } from "@/lib/api-auth";
 import { canViewDoorEntryLog } from "@/lib/access";
 import { istTodayDateOnly } from "@/lib/ist-date";
-import { dayBars } from "@/lib/hr/day-rules";
+import { dayBars, isHalfDayReason } from "@/lib/hr/day-rules";
 import { shortLeaveDayState, resolveShortLeaveDayStatus, isShortLeaveReason } from "@/lib/hr/short-leave";
 
 // GET /api/hr/attendance?userId=X&month=2026-04
@@ -105,7 +105,8 @@ export async function GET(req: NextRequest) {
     const ymdKey = (d: Date) => new Date(d).toISOString().slice(0, 10);
     const slByDate = new Map<string, Array<{ reason: string | null; status: string }>>();
     for (const l of slRows) {
-      if (!isShortLeaveReason(l.reason)) continue;
+      // Half-day rows ride along so a half + short day judges the working half.
+      if (!isShortLeaveReason(l.reason) && !isHalfDayReason(l.reason)) continue;
       // Short leave is always a single date, but walk the range defensively.
       const cur = new Date(Date.UTC(l.fromDate.getUTCFullYear(), l.fromDate.getUTCMonth(), l.fromDate.getUTCDate()));
       const stop = new Date(Date.UTC(l.toDate.getUTCFullYear(), l.toDate.getUTCMonth(), l.toDate.getUTCDate()));
@@ -179,14 +180,14 @@ export async function GET(req: NextRequest) {
       // auto-LOP use, so a page can never disagree with the payslip: a live
       // short leave lowers the bar by 2h/slot (completed → full day), and a
       // rejected one prices the [bar−2h, bar) band at ¼ day.
-      const slDay = slByDate.get(ymdKey(recDate));
-      if (slDay?.length) {
-        const st = shortLeaveDayState(slDay);
+      const st = shortLeaveDayState(slByDate.get(ymdKey(recDate)) ?? []);
+      if (st.appliedAny) {
         return {
           totalMinutes,
           status: resolveShortLeaveDayStatus({
             worked: totalMinutes, fullBar: full, halfBar: half,
             activeMin: st.activeMin, rejectedMin: st.rejectedMin, prevStatus: existingStatus,
+            halfLeave: st.halfLeaveActive,
           }),
         };
       }

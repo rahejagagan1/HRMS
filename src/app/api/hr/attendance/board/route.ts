@@ -123,8 +123,9 @@ export async function GET() {
       const sl = SL_RE.exec(reason);
       if (sl) {
         // Collect EVERY short-leave slot (a morning + evening pair can
-        // coexist); "short" only sticks as the kind if no full/half leave
-        // also covers today (combos are blocked at apply, belt-and-braces).
+        // coexist); "short" only sticks as the kind if no half leave also
+        // covers today — a half + short combo (HR, 2026-11-25) shows the half
+        // badge with the short-leave slot captioned under it.
         const slot = (sl[1] ?? "").toLowerCase() === "evening" ? "Evening" : "Morning";
         const arr = shortSlotsByUser.get(r.userId) ?? [];
         if (!arr.includes(slot)) arr.push(slot);

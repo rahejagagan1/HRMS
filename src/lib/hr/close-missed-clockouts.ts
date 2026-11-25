@@ -26,7 +26,9 @@ export async function closeMissedClockOuts(): Promise<number> {
       // auto-LOP job already applied to an unregularized missed clock-out —
       // otherwise the sweep would flip half_day_lop / lop back to
       // missed_clock_out on the next run).
-      status: { notIn: ["missed_clock_out", "on_leave", "weekend", "holiday", "lop", "half_day_lop"] },
+      // short_lop too: without it the sweep reverted every ¼-day missed-swipe
+      // LOP hourly, and auto-LOP re-charged the LWP counter +0.25 each day.
+      status: { notIn: ["missed_clock_out", "on_leave", "weekend", "holiday", "lop", "half_day_lop", "short_lop"] },
     },
     data: { status: "missed_clock_out" },
   });

@@ -71,6 +71,8 @@ type ShiftCtx = {
 };
 
 const ymd = (d: Date) => new Date(d).toISOString().slice(0, 10);
+/** Missed clock-out on a short-leave day costs ½ (not ¼) from this date. */
+const MISSED_SWIPE_HALF_FROM = "2026-11-01";
 
 /** One query: shift work-rules for a set of users (raw SQL so new Shift
  *  columns work even if the generated client is stale — same reason as
@@ -201,9 +203,9 @@ export async function priceMissedSwipes(opts: {
   const [shifts, leaves, regs, wfhs, ods, compOffs, holidays] = await Promise.all([
     shiftContextForUsers(affectedIds),
     prisma.leaveApplication.findMany({
-      // Rejected SHORT leaves ride along: the "applied" fact alone softens a
-      // missed-swipe charge to ¼ day (agreed 2026-08-04), so pricing must
-      // see them even though rejected rows grant no leave.
+      // Rejected SHORT leaves ride along: before 1 Nov 2026 the "applied" fact
+      // alone softened a missed-swipe charge to ¼ day (agreed 2026-08-04), so
+      // pricing those days must see them even though rejected rows grant no leave.
       where: {
         userId: { in: affectedIds }, fromDate: { lte: lastDay }, toDate: { gte: firstDay },
         OR: [
@@ -271,17 +273,27 @@ export async function priceMissedSwipes(opts: {
       out.push({ ...base, charge: 0, reason: "Covered by approved regularization / OD / comp-off" });
       continue;
     }
-    // Short-leave day: a forgotten punch costs ¼ day instead of ½ — the
-    // application (even a rejected one) shows intent. When the APPROVED
-    // excuse plus recorded minutes already cover the reduced bar, the row
-    // is a stale artefact like the ghost-session case: free, but flagged.
+    // Short-leave day. When the APPROVED excuse plus recorded minutes already
+    // cover the reduced bar, the row is a stale artefact like the ghost-
+    // session case: free, but flagged. Otherwise, from 1 Nov 2026 (HR,
+    // 2026-11-25) a forgotten punch costs ½ like any day — capped at ¼ on a
+    // half + short combo, where not coming at all costs only ¼. Earlier days
+    // keep the old rule: any application, even a rejected one → ¼.
     const slRows = dayLeaves.filter((l) => isShortLeaveReason(l.reason));
     if (slRows.length > 0) {
       const approvedMin = slRows.filter((l) => l.status === "approved").length * SHORT_LEAVE_MINUTES;
-      if (approvedMin > 0 && worked >= bars.full - approvedMin) {
+      // Half + short day (HR, 2026-11-25): an approved half-day leave pays
+      // the other half, so the bar is the working half. (A pure short-leave
+      // day reaching the full bar already returned free above.)
+      const halfApproved = dayLeaves.some((l) => l.status === "approved" && HALF_MARKER_RE.test(String(l.reason ?? "")) && Number(l.totalDays) <= 0.5);
+      if (worked >= (halfApproved ? bars.half : bars.full) - approvedMin) {
         out.push({ ...base, charge: 0, reason: "Short leave honored — reduced day completed; stale missed-clock-out status", pendingDecision: "stale_status" });
-      } else {
+      } else if (key < MISSED_SWIPE_HALF_FROM) {
         out.push({ ...base, charge: SHORT_LOP_DAYS, reason: "Missed clock-out on a short-leave day (auto ¼ day)" });
+      } else if (halfApproved && approvedMin > 0) {
+        out.push({ ...base, charge: SHORT_LOP_DAYS, reason: "Missed clock-out on a half-day + short leave day (¼ — capped at what not coming costs)" });
+      } else {
+        out.push({ ...base, charge: 0.5, reason: "Missed clock-out, not regularized (auto ½ day)" });
       }
       continue;
     }

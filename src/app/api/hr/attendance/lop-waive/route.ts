@@ -48,6 +48,7 @@ export async function POST(req: NextRequest) {
     const lwpCharged =
       row.status === "lop" ? 1
       : row.status === "half_day_lop" ? 0.5
+      : row.status === "short_lop" && /^Auto-marked quarter-day LOP/i.test(notes) ? 0.25
       : row.status === "missed_clock_out" && /Auto-marked half-day LOP|Auto-LOP:/i.test(notes) ? 0.5
       : 0;
 

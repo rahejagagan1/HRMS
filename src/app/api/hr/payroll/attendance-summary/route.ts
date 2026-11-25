@@ -16,7 +16,7 @@ import prisma from "@/lib/prisma";
 import { requireAuth, canViewSalary, serverError } from "@/lib/api-auth";
 import { resolveBrandScope } from "@/lib/hr/brand-scope";
 import { priceMissedSwipes, findTamperedRows, shiftContextForUsers, isPayrollWorkingDay, longLwpDates } from "@/lib/hr/lop-integrity";
-import { unpaidLeaveDayWeight } from "@/lib/hr/short-leave";
+import { unpaidLeaveDayWeight, isHalfDayLeave } from "@/lib/hr/short-leave";
 
 export const dynamic = "force-dynamic";
 
@@ -117,7 +117,20 @@ export async function GET(req: NextRequest) {
         }
         return row;
       };
+      // Half-day EXCUSE — same rule as payroll/generate + exit F&F: a half_day
+      // row isn't LOP when an approved half-day leave covers the other half
+      // (paid → that half is paid; unpaid → the LWP walk below charges its 0.5).
+      // Without it this pre-check showed 0.5 LOP the payslip never charged.
+      const halfLeaves = attRows.length ? await prisma.leaveApplication.findMany({
+        where: {
+          userId: { in: Array.from(new Set(attRows.map((r) => r.userId))) }, status: "approved",
+          fromDate: { lte: monthEnd }, toDate: { gte: monthStart },
+        },
+        select: { userId: true, fromDate: true, toDate: true, reason: true, totalDays: true },
+      }) : [];
+      const excusedHalf = new Set(halfLeaves.filter(isHalfDayLeave).map((lv) => `${lv.userId}|${ymd(lv.fromDate)}`));
       for (const r of attRows) {
+        if (r.status === "half_day" && excusedHalf.has(`${r.userId}|${ymd(r.date)}`)) continue;
         const meta = STATUS_META[r.status] ?? { reason: r.status, weight: 1 };
         const row = getRow(r.userId, r.userName, r.employeeId);
         if (meta.weight >= 1) row.absentDays += 1; else row.halfDays += 1;
@@ -216,7 +229,8 @@ export async function GET(req: NextRequest) {
             row.lopDays += weight;
             row.dates.push({
               date: ymd(cur),
-              reason: weight === 0.5 ? `Unpaid leave (${lv.leaveType}, half day)` : `Unpaid leave (${lv.leaveType})`,
+              reason: weight === 0.5 ? `Unpaid leave (${lv.leaveType}, half day)`
+                : weight === 0.25 ? `Unpaid leave (${lv.leaveType}, short leave)` : `Unpaid leave (${lv.leaveType})`,
               weight,
             });
           }

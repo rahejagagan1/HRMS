@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
+import { lwpChargedFor } from "@/lib/hr/short-leave";
 
 // Accepts either the base client or a transaction client so callers can run the
 // refund inside their existing transaction.
@@ -15,6 +16,7 @@ type Db = Prisma.TransactionClient | typeof prisma;
  *
  *   • status "lop"          → refund 1.0 day of LWP "used"
  *   • status "half_day_lop" → refund 0.5 day
+ *   • status "short_lop" with the auto-LOP note → refund 0.25 day
  *   • anything else         → no-op (returns 0)
  *
  * Idempotent: once the row is no longer a LOP it refunds nothing, so repeated
@@ -27,9 +29,9 @@ type Db = Prisma.TransactionClient | typeof prisma;
 export async function refundLopLwp(db: Db, userId: number, dateOnly: Date): Promise<number> {
   const ex = await db.attendance.findUnique({
     where: { userId_date: { userId, date: dateOnly } },
-    select: { status: true },
+    select: { status: true, notes: true },
   });
-  const amount = ex?.status === "lop" ? 1 : ex?.status === "half_day_lop" ? 0.5 : 0;
+  const amount = lwpChargedFor(ex);
   if (amount === 0) return 0;
 
   const lwp = await db.leaveType.findUnique({ where: { code: "LWP" }, select: { id: true } });

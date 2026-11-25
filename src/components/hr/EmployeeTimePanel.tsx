@@ -462,12 +462,17 @@ export function EmployeeTimePanel({
   // Leaves are date-RANGES — find the best applicable leave for a given day.
   const userLeaves = leavesData.filter((l: any) => l.userId === userId);
   const findLeaveForDate = (dateOnly: string): any | null => {
+    // A live half / full leave always outranks a short leave on the same date
+    // (half + short combo): it drives the split-day label and the late cutoff,
+    // while the short leave keeps its own tag (dayShortLeaves below).
+    const rank = (l: any) => statusRank(l.status)
+      + (!/\[\s*short\s*leave/i.test(l.reason ?? "") && l.status !== "rejected" && l.status !== "cancelled" ? 10 : 0);
     let best: any = null;
     for (const l of userLeaves) {
       const from = String(l.fromDate).slice(0, 10);
       const to   = String(l.toDate).slice(0, 10);
       if (dateOnly >= from && dateOnly <= to) {
-        if (!best || statusRank(l.status) > statusRank(best.status)) best = l;
+        if (!best || rank(l) > rank(best)) best = l;
       }
     }
     return best;
@@ -1284,7 +1289,8 @@ export function EmployeeTimePanel({
               // matches the Me-section's `!hasPendingAny` guard so a pending
               // regularization / WFH / leave hides the harsher "Late" or
               // "Missed" label until the request is decided.
-              const hasPendingAny = !!(isRegPending || isWfhPending || isLeavePending);
+              const hasPendingAny = !!(isRegPending || isWfhPending || isLeavePending
+                || dayShortLeaves.some((l: any) => l.status === "pending" || l.status === "partially_approved"));
               const firstIn = sess[0]?.clockIn
                 ? new Date(sess[0].clockIn)
                 : (rec.clockIn ? new Date(rec.clockIn) : null);

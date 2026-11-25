@@ -40,6 +40,18 @@ export const SHORT_LOP_STATUS = "short_lop";
 /** LOP days the short_lop status charges in payroll. */
 export const SHORT_LOP_DAYS = 0.25;
 
+/** LWP "used" days the auto-LOP job already charged for an attendance row.
+ *  ONE rule for both sides of the counter: auto-LOP charges only the
+ *  difference when it re-prices a day (full → half → ¼), and lop-lwp refunds
+ *  exactly this when the day is later covered. A ¼ day stamped at clock-out
+ *  (rejected short leave) never touched the counter, hence the note check. */
+export function lwpChargedFor(row: { status: string; notes: string | null } | null | undefined): number {
+  if (row?.status === "lop") return 1;
+  if (row?.status === "half_day_lop") return 0.5;
+  if (row?.status === SHORT_LOP_STATUS && /^Auto-marked quarter-day LOP/i.test(row.notes ?? "")) return SHORT_LOP_DAYS;
+  return 0;
+}
+
 const MARKER_RE = /\[\s*short\s*leave\s*[-–:]?\s*(morning|evening)?\s*\]/i;
 
 /** True when a reason string carries the short-leave marker. */
@@ -95,47 +107,131 @@ export function shortLeaveExcuseMinutes(reasons: Array<string | null | undefined
 //   • Below the reduced bar the normal bands apply with the approved excuse
 //     credited: (worked + approved excuse) ≥ half bar → half_day, else the
 //     row keeps its prior status (absent handling stays auto-LOP's job).
-//   • Missed clock-out on a day with ANY short-leave application (even a
-//     rejected one) → ¼ day instead of the standard ½ (priced in auto-LOP +
-//     lop-integrity, not here).
+//   • Missed clock-out: ½ day like any day (HR, 2026-11-25, from 1 Nov —
+//     replaced the old ¼ for any short-leave application), capped at ¼ on
+//     a half + short combo day, where not coming at all costs only ¼.
+//     Priced in auto-LOP + lop-integrity, not here.
 //   • CL once approved stays spent regardless of the day's outcome.
 
-/** Aggregate a day's short-leave applications into excuse minutes.
- *  `active` = pending / partially_approved / approved (an undecided request
- *  is honoured provisionally — the decision handlers re-settle the day). */
+const LIVE_STATUSES = ["pending", "partially_approved", "approved"];
+const HALF_MARKER_RE = /^\s*\[(Half Day|First Half|Second Half)\]/i;
+
+/** Aggregate a day's leave applications into short-leave excuse minutes.
+ *  `rows` = EVERY leave on the date (any status) — non-short rows only feed
+ *  `halfLeaveActive`. `active` = pending / partially_approved / approved (an
+ *  undecided request is honoured provisionally — the decision handlers
+ *  re-settle the day). */
 export function shortLeaveDayState(rows: Array<{ reason: string | null; status: string }>): {
   appliedAny: boolean; activeMin: number; rejectedMin: number;
   /** Minutes from live MORNING slots only — shifts the late cutoff. */
   morningActiveMin: number;
+  /** A live half-day leave also sits on the date (half + short combo). */
+  halfLeaveActive: boolean;
 } {
-  let activeMin = 0, rejectedMin = 0, morningActiveMin = 0, appliedAny = false;
+  let activeMin = 0, rejectedMin = 0, morningActiveMin = 0, appliedAny = false, halfLeaveActive = false;
   for (const r of rows) {
-    if (!isShortLeaveReason(r.reason)) continue;
+    if (!isShortLeaveReason(r.reason)) {
+      if (HALF_MARKER_RE.test(String(r.reason ?? "")) && LIVE_STATUSES.includes(r.status)) halfLeaveActive = true;
+      continue;
+    }
     appliedAny = true;
-    if (["pending", "partially_approved", "approved"].includes(r.status)) {
+    if (LIVE_STATUSES.includes(r.status)) {
       activeMin += SHORT_LEAVE_MINUTES;
       if (shortLeaveSlot(r.reason) === "morning") morningActiveMin += SHORT_LEAVE_MINUTES;
     } else if (r.status === "rejected") rejectedMin += SHORT_LEAVE_MINUTES;
   }
-  return { appliedAny, activeMin, rejectedMin, morningActiveMin };
+  return { appliedAny, activeMin, rejectedMin, morningActiveMin, halfLeaveActive };
 }
 
 /** Status a clocked-out short-leave day should carry. `prevStatus` is kept
- *  for the full-bar case (preserves "late") and the under-half fallthrough. */
+ *  for the full-bar case (preserves "late") and the under-half fallthrough.
+ *  `halfLeave` (half + short combo, HR 2026-11-25): a live half-day leave
+ *  pays the other half, so the bar is the WORKING half (minus the excuse);
+ *  meeting it reads `half_day` — the status a plain half-leave day gets, which
+ *  payroll excuses against the leave. Falling short is left to auto-LOP. */
 export function resolveShortLeaveDayStatus(opts: {
   worked: number; fullBar: number; halfBar: number;
   activeMin: number; rejectedMin: number; prevStatus: string;
+  halfLeave?: boolean;
 }): string {
-  const { worked, fullBar, halfBar, activeMin, rejectedMin, prevStatus } = opts;
-  if (worked >= fullBar) return prevStatus === "late" ? "late" : "present";
-  if (activeMin > 0 && worked >= fullBar - activeMin) {
-    return prevStatus === "late" ? "late" : "present"; // excused full day
-  }
-  if (rejectedMin > 0 && worked >= fullBar - activeMin - rejectedMin) {
+  const { worked, fullBar, halfBar, activeMin, rejectedMin, prevStatus, halfLeave = false } = opts;
+  const kept = prevStatus === "late" ? "late" : "present";
+  if (worked >= fullBar) return kept;
+  const bar = halfLeave ? halfBar : fullBar;
+  if (worked >= bar - activeMin) return halfLeave ? "half_day" : kept; // excused (reduced) day done
+  if (rejectedMin > 0 && worked >= bar - activeMin - rejectedMin) {
     return SHORT_LOP_STATUS; // rejected concession band → ¼ day
   }
+  if (halfLeave) return prevStatus; // working half short → auto-LOP prices it
   if (worked + activeMin >= halfBar) return "half_day";
   return prevStatus; // under half bar — same fallthrough as a normal day
+}
+
+/** Auto-LOP verdict for a HALF-day-leave day (the other half is worked), past
+ *  the grace window. Short-leave minutes in the working half lower its bar.
+ *    met          → no charge
+ *    short_lop    → half + LIVE short leave, the hours between them not
+ *                   worked (or not recorded — a missed clock-out costs the
+ *                   same ¼, never more than not coming): HR, 2026-11-25
+ *    half_day_lop → plain half-day leave (a rejected short leave grants
+ *                   nothing), working half not completed or clock-out missed */
+export function halfLeaveDayVerdict(o: {
+  worked: number; halfBar: number; liveSlMin: number; rejectedSlMin: number;
+}): "met" | "short_lop" | "half_day_lop" {
+  if (o.worked >= o.halfBar - o.liveSlMin - o.rejectedSlMin) return "met";
+  if (o.liveSlMin > 0) return "short_lop";
+  return "half_day_lop";
+}
+
+// ── Same-day booking compatibility (apply + edit share it) ───────────────
+// A single-day booking occupies one segment of the date. Two bookings may
+// share a date only when their segments don't overlap:
+//   • First Half + Second Half            (the two halves)
+//   • Morning + Evening short leave       (the two 2h slots)
+//   • First Half + Evening short leave    (HR, 2026-11-25)
+//   • Second Half + Morning short leave   (HR, 2026-11-25)
+// Checked pairwise, so a triple that overlaps anywhere (First Half + Morning
+// + Evening) is still blocked. Generic [Half Day] has no side → full.
+export type LeaveSegment = "full" | "first" | "second" | "sl-morning" | "sl-evening";
+
+export function leaveSegment(reason: string | null | undefined): LeaveSegment {
+  if (isShortLeaveReason(reason)) return shortLeaveSlot(reason) === "evening" ? "sl-evening" : "sl-morning";
+  const m = /^\s*\[(First Half|Second Half)\]/i.exec(String(reason ?? ""));
+  if (m) return /first/i.test(m[1]) ? "first" : "second";
+  return "full";
+}
+
+const SAME_DAY_PAIRS = new Set(["first|second", "sl-morning|sl-evening", "first|sl-evening", "second|sl-morning"]);
+/** Half + short combos are allowed on dates from here on (HR, 2026-11-25).
+ *  The ONE gate for the whole combo rule set: earlier dates keep the old
+ *  block, so no pre-November day can ever carry a combo — and every
+ *  downstream rule (¼ LOP, reduced working half) keys off a combo existing. */
+export const HALF_SHORT_COMBO_FROM = "2026-11-01";
+type Booking = { fromDate: Date | string; toDate: Date | string; reason: string | null };
+const ymdOf = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
+
+/** Why `next` can't be booked beside the subject's LIVE leaves that overlap
+ *  its range (caller queries them), or null when it can. `halfBarMin` = the
+ *  date's half-day bar (null = no shift): a half + short combo must leave
+ *  ≥ 2h of real work in the working half — MIN_SHORT_LEAVE_BAR_MIN's rule. */
+export function sameDayLeaveConflict(next: Booking, live: Booking[], halfBarMin: number | null): string | null {
+  const nSeg = leaveSegment(next.reason);
+  const day = ymdOf(next.fromDate);
+  const single = day === ymdOf(next.toDate);
+  let halfWithShort = false;
+  for (const o of live) {
+    const oSeg = leaveSegment(o.reason);
+    const halfShort = nSeg.startsWith("sl-") !== oSeg.startsWith("sl-");
+    const fits = single && ymdOf(o.fromDate) === day && ymdOf(o.toDate) === day
+      && (SAME_DAY_PAIRS.has(`${nSeg}|${oSeg}`) || SAME_DAY_PAIRS.has(`${oSeg}|${nSeg}`))
+      && !(halfShort && day < HALF_SHORT_COMBO_FROM);
+    if (!fits) return isShortLeaveReason(next.reason) ? "You already have leave booked for this slot / day." : "Overlapping leave exists";
+    if (halfShort) halfWithShort = true;
+  }
+  if (halfWithShort && halfBarMin !== null && halfBarMin < MIN_SHORT_LEAVE_BAR_MIN) {
+    return `A half-day leave plus a 2-hour short leave needs a ${MIN_SHORT_LEAVE_BAR_MIN / 60}h+ working half — this day's half is only ${Math.round(halfBarMin / 60 * 10) / 10}h.`;
+  }
+  return null;
 }
 
 // ── Unpaid-leave pricing (payroll) ───────────────────────────────────────
@@ -148,7 +244,7 @@ type LeaveSpan = { fromDate: Date | string; toDate: Date | string; reason: strin
 
 /** Single-date [Half Day]/[First Half]/[Second Half] leave of ≤ 0.5 days. */
 export function isHalfDayLeave(lv: LeaveSpan): boolean {
-  return /^\s*\[(Half Day|First Half|Second Half)\]/i.test(String(lv.reason ?? ""))
+  return HALF_MARKER_RE.test(String(lv.reason ?? ""))
     && Number(lv.totalDays) <= 0.5
     && new Date(lv.fromDate).getTime() === new Date(lv.toDate).getTime();
 }

@@ -198,8 +198,8 @@ function LeaveBadge({ kind, slots }: { kind: "full" | "first_half" | "second_hal
   const label =
     kind === "short" ? `Short leave${slots ? ` (${slots})` : ""} — 2h excused, working today` :
     kind === "full" ? "On full-day leave" :
-    kind === "first_half" ? "On first-half leave" :
-    "On second-half leave";
+    kind === "first_half" ? `On first-half leave${slots ? ` + short leave (${slots})` : ""}` :
+    `On second-half leave${slots ? ` + short leave (${slots})` : ""}`;
   return (
     <span
       aria-label={label}
@@ -3649,7 +3649,7 @@ export default function HRHomePage() {
                       <span className={`w-11 truncate text-center text-[9.5px] ${C.t3}`}>{u.name.split(" ")[0]}</span>
                       {/* Short leave ≠ a day off — say so under the avatar so
                           nobody reads a 2h excuse as a one-day leave. */}
-                      {u.leaveKind === "short" && (
+                      {u.shortLeaveSlots && (
                         <span className="text-[8.5px] font-semibold leading-none text-violet-600">
                           Short{u.shortLeaveSlots ? ` · ${u.shortLeaveSlots}` : ""}
                         </span>
